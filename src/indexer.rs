@@ -2,18 +2,28 @@ use crate::parser::{RustParser, FunctionInfo};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
-use tracing::{info, warn, debug};
+use tracing::{info, warn, debug, error};
+use notify::{RecommendedWatcher, Watcher, RecursiveMode, Event, EventKind};
+use tokio::sync::mpsc;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 pub struct CodeIndexer {
     parser: RustParser,
     indexed_files: HashMap<PathBuf, u64>, // ファイルパス -> 最終更新時刻のハッシュ
+    watcher: Option<RecommendedWatcher>,
+    watch_tx: Option<mpsc::UnboundedSender<notify::Result<Event>>>,
 }
+
+pub type FileWatchReceiver = mpsc::UnboundedReceiver<notify::Result<Event>>;
 
 impl CodeIndexer {
     pub fn new() -> Self {
         Self {
             parser: RustParser::new(),
             indexed_files: HashMap::new(),
+            watcher: None,
+            watch_tx: None,
         }
     }
 
@@ -89,7 +99,139 @@ impl CodeIndexer {
             total_functions,
             unique_function_names,
             indexed_files_count,
+            is_watching: self.watcher.is_some(),
         }
+    }
+
+    /// ファイル監視を開始
+    pub fn start_watching<P: AsRef<Path>>(&mut self, watch_path: P) -> Result<FileWatchReceiver> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let watch_tx = tx.clone();
+
+        let mut watcher = RecommendedWatcher::new(
+            move |res: notify::Result<Event>| {
+                if let Err(_) = tx.send(res) {
+                    error!("Failed to send file watch event");
+                }
+            },
+            notify::Config::default(),
+        )?;
+
+        watcher.watch(watch_path.as_ref(), RecursiveMode::Recursive)?;
+        
+        info!("Started watching directory: {}", watch_path.as_ref().display());
+        
+        self.watcher = Some(watcher);
+        self.watch_tx = Some(watch_tx);
+        
+        Ok(rx)
+    }
+
+    /// ファイル監視を停止
+    pub fn stop_watching(&mut self) {
+        if let Some(mut watcher) = self.watcher.take() {
+            info!("Stopping file watcher");
+            // Watcherがdropされると自動的に監視停止
+        }
+        self.watch_tx = None;
+    }
+
+    /// 監視イベントを処理して差分更新
+    pub fn handle_watch_event(&mut self, event: Event) -> Result<Vec<String>> {
+        let mut updated_functions = Vec::new();
+        
+        debug!("Processing watch event: {:?}", event);
+
+        match event.kind {
+            EventKind::Create(_) | EventKind::Modify(_) => {
+                for path in event.paths {
+                    if self.is_rust_file(&path) {
+                        info!("File changed, re-indexing: {}", path.display());
+                        
+                        // 変更前の関数を記録
+                        let old_functions: Vec<String> = self.parser.get_all_functions()
+                            .iter()
+                            .filter(|(_, funcs)| {
+                                funcs.iter().any(|f| f.file_path == path.to_string_lossy())
+                            })
+                            .map(|(name, _)| name.clone())
+                            .collect();
+
+                        // ファイルを再インデックス
+                        self.reindex_file(&path)?;
+                        
+                        // 変更後の関数を記録
+                        let new_functions: Vec<String> = self.parser.get_all_functions()
+                            .iter()
+                            .filter(|(_, funcs)| {
+                                funcs.iter().any(|f| f.file_path == path.to_string_lossy())
+                            })
+                            .map(|(name, _)| name.clone())
+                            .collect();
+
+                        // 変更された関数名を記録
+                        for func_name in old_functions.iter().chain(new_functions.iter()) {
+                            if !updated_functions.contains(func_name) {
+                                updated_functions.push(func_name.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            EventKind::Remove(_) => {
+                for path in event.paths {
+                    if self.is_rust_file(&path) {
+                        info!("File removed, cleaning index: {}", path.display());
+                        
+                        // 削除されたファイルの関数を記録
+                        let removed_functions: Vec<String> = self.parser.get_all_functions()
+                            .iter()
+                            .filter(|(_, funcs)| {
+                                funcs.iter().any(|f| f.file_path == path.to_string_lossy())
+                            })
+                            .map(|(name, _)| name.clone())
+                            .collect();
+
+                        // インデックスから削除
+                        self.remove_file_from_index(&path);
+                        
+                        updated_functions.extend(removed_functions);
+                    }
+                }
+            }
+            _ => {
+                // その他のイベントは無視
+            }
+        }
+
+        Ok(updated_functions)
+    }
+
+    /// 単一ファイルを再インデックス（差分更新用）
+    fn reindex_file<P: AsRef<Path>>(&mut self, file_path: P) -> Result<()> {
+        let file_path = file_path.as_ref();
+        
+        // まず古いデータを削除
+        self.remove_file_from_index(file_path);
+        
+        // 新しくインデックス
+        self.index_file(file_path)?;
+        
+        Ok(())
+    }
+
+    /// ファイルをインデックスから削除
+    fn remove_file_from_index<P: AsRef<Path>>(&mut self, file_path: P) {
+        let file_path = file_path.as_ref();
+        let file_path_str = file_path.to_string_lossy();
+        
+        // パーサーから該当ファイルの関数を削除
+        self.parser.remove_file_functions(&file_path_str);
+        
+        // インデックスファイル記録からも削除
+        self.indexed_files.remove(file_path);
+        
+        debug!("Removed file from index: {}", file_path.display());
     }
 
     fn walk_directory(&mut self, dir_path: &Path) -> Result<()> {
@@ -143,12 +285,13 @@ pub struct IndexStats {
     pub total_functions: usize,
     pub unique_function_names: usize,
     pub indexed_files_count: usize,
+    pub is_watching: bool,
 }
 
 impl std::fmt::Display for IndexStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "IndexStats {{ total_functions: {}, unique_names: {}, files: {} }}", 
-               self.total_functions, self.unique_function_names, self.indexed_files_count)
+        write!(f, "IndexStats {{ total_functions: {}, unique_names: {}, files: {}, watching: {} }}", 
+               self.total_functions, self.unique_function_names, self.indexed_files_count, self.is_watching)
     }
 }
 
@@ -185,6 +328,7 @@ pub fn library_function(x: i32) -> i32 {
         let stats = indexer.get_stats();
         assert_eq!(stats.total_functions, 3);
         assert_eq!(stats.indexed_files_count, 2);
+        assert_eq!(stats.is_watching, false);
 
         // main関数を検索
         let main_funcs = indexer.find_definition("main").unwrap();

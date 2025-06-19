@@ -1,4 +1,4 @@
-use crate::indexer::CodeIndexer;
+use crate::indexer::{CodeIndexer, FileWatchReceiver};
 use crate::protocol::{self, ServerRequest, ServerResponse, FindDefinitionParams, FindDefinitionResponse, StatsResponse};
 use crate::web_ui::{WebUIServer, LogSender, LogBroadcaster};
 use anyhow::{Context, Result};
@@ -63,8 +63,18 @@ impl CodeIntelServer {
         info!("{}", log_message);
         self.broadcast_log(log_message);
 
-        // TODO: ファイル監視を別タスクで開始
-        // self.start_file_watcher().await?;
+        // ファイル監視を別タスクで開始
+        {
+            let indexer_clone = Arc::clone(&self.indexer);
+            let project_path = self.project_path.clone();
+            let log_broadcaster = self.log_broadcaster.clone();
+            
+            tokio::spawn(async move {
+                if let Err(e) = Self::start_file_watcher(indexer_clone, project_path, log_broadcaster).await {
+                    error!("File watcher error: {}", e);
+                }
+            });
+        }
 
         // クライアント接続を受け付け
         loop {
@@ -119,6 +129,7 @@ impl CodeIntelServer {
                             stats.indexed_files_count,
                             stats.total_functions,
                             stats.unique_function_names,
+                            stats.is_watching,
                         );
                     }
                     response
@@ -222,8 +233,80 @@ impl CodeIntelServer {
                 stats.indexed_files_count,
                 stats.total_functions,
                 stats.unique_function_names,
+                stats.is_watching,
             );
         }
+    }
+
+    /// ファイル監視機能を開始
+    async fn start_file_watcher(
+        indexer: Arc<Mutex<CodeIndexer>>,
+        project_path: String,
+        log_broadcaster: Option<LogBroadcaster>,
+    ) -> Result<()> {
+        let mut watch_receiver = {
+            let mut indexer_guard = indexer.lock().await;
+            let receiver = indexer_guard.start_watching(&project_path)?;
+            
+            let log_message = format!("File watcher started for: {}", project_path);
+            info!("{}", log_message);
+            if let Some(ref broadcaster) = log_broadcaster {
+                broadcaster.log(log_message);
+            }
+            
+            receiver
+        };
+
+        // ファイル監視イベントを処理
+        while let Some(event_result) = watch_receiver.recv().await {
+            match event_result {
+                Ok(event) => {
+                    let mut indexer_guard = indexer.lock().await;
+                    match indexer_guard.handle_watch_event(event) {
+                        Ok(updated_functions) => {
+                            if !updated_functions.is_empty() {
+                                let log_message = format!(
+                                    "File changes detected, updated {} function(s): {}",
+                                    updated_functions.len(),
+                                    updated_functions.join(", ")
+                                );
+                                info!("{}", log_message);
+                                if let Some(ref broadcaster) = log_broadcaster {
+                                    broadcaster.log(log_message);
+                                }
+
+                                // 統計情報を更新
+                                let stats = indexer_guard.get_stats();
+                                if let Some(ref broadcaster) = log_broadcaster {
+                                    broadcaster.send_stats(
+                                        stats.indexed_files_count,
+                                        stats.total_functions,
+                                        stats.unique_function_names,
+                                        stats.is_watching,
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let log_message = format!("Error processing file watch event: {}", e);
+                            error!("{}", log_message);
+                            if let Some(ref broadcaster) = log_broadcaster {
+                                broadcaster.log(log_message);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    let log_message = format!("File watch error: {}", e);
+                    error!("{}", log_message);
+                    if let Some(ref broadcaster) = log_broadcaster {
+                        broadcaster.log(log_message);
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 

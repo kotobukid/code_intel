@@ -29,7 +29,7 @@ pub struct WebUIServer {
 use tokio::sync::RwLock;
 
 lazy_static::lazy_static! {
-    static ref CURRENT_STATS: Arc<RwLock<Option<(usize, usize, usize)>>> = Arc::new(RwLock::new(None));
+    static ref CURRENT_STATS: Arc<RwLock<Option<(usize, usize, usize, bool)>>> = Arc::new(RwLock::new(None));
 }
 
 impl WebUIServer {
@@ -173,6 +173,10 @@ async fn dashboard() -> impl IntoResponse {
             <div id="unique-count">-</div>
         </div>
         <div class="stat-card">
+            <h3>👁️ File Watching</h3>
+            <div id="watch-status">-</div>
+        </div>
+        <div class="stat-card">
             <h3>⏱️ Uptime</h3>
             <div id="uptime">-</div>
         </div>
@@ -264,11 +268,13 @@ async fn dashboard() -> impl IntoResponse {
             const fileCountEl = document.getElementById('file-count');
             const functionCountEl = document.getElementById('function-count');
             const uniqueCountEl = document.getElementById('unique-count');
+            const watchStatusEl = document.getElementById('watch-status');
             
             console.log('Elements found:', {
                 fileCountEl,
                 functionCountEl, 
-                uniqueCountEl
+                uniqueCountEl,
+                watchStatusEl
             });
             
             if (stats.indexed_files_count !== undefined && fileCountEl) {
@@ -282,6 +288,11 @@ async fn dashboard() -> impl IntoResponse {
             if (stats.unique_function_names !== undefined && uniqueCountEl) {
                 console.log('Updating unique-count to:', stats.unique_function_names);
                 uniqueCountEl.textContent = stats.unique_function_names;
+            }
+            if (stats.is_watching !== undefined && watchStatusEl) {
+                console.log('Updating watch-status to:', stats.is_watching);
+                watchStatusEl.textContent = stats.is_watching ? '🟢 Active' : '🔴 Inactive';
+                watchStatusEl.style.color = stats.is_watching ? '#10b981' : '#ef4444';
             }
         }
         
@@ -337,12 +348,13 @@ async fn websocket_connection(socket: WebSocket, state: WebUIState) {
     }
     
     // 保存されている統計情報があれば送信
-    if let Some((indexed_files, total_functions, unique_names)) = *CURRENT_STATS.read().await {
+    if let Some((indexed_files, total_functions, unique_names, is_watching)) = *CURRENT_STATS.read().await {
         let stats_message = json!({
             "type": "stats",
             "indexed_files_count": indexed_files,
             "total_functions": total_functions,
-            "unique_function_names": unique_names
+            "unique_function_names": unique_names,
+            "is_watching": is_watching
         });
         
         if let Err(e) = ws_sender.send(Message::Text(stats_message.to_string())).await {
@@ -417,18 +429,19 @@ impl LogBroadcaster {
         let _ = self.sender.send(message);
     }
 
-    pub fn send_stats(&self, indexed_files: usize, total_functions: usize, unique_names: usize) {
+    pub fn send_stats(&self, indexed_files: usize, total_functions: usize, unique_names: usize, is_watching: bool) {
         // グローバル統計を更新
         tokio::spawn(async move {
             let mut stats = CURRENT_STATS.write().await;
-            *stats = Some((indexed_files, total_functions, unique_names));
+            *stats = Some((indexed_files, total_functions, unique_names, is_watching));
         });
         
         let stats_message = json!({
             "type": "stats",
             "indexed_files_count": indexed_files,
             "total_functions": total_functions,
-            "unique_function_names": unique_names
+            "unique_function_names": unique_names,
+            "is_watching": is_watching
         });
         let _ = self.sender.send(stats_message.to_string());
     }

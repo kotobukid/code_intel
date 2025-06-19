@@ -29,7 +29,7 @@ impl CodeIntelClient {
         };
 
         let request_json = serde_json::to_string(&request)?;
-        debug!("Sending request: {}", request_json);
+        // debug!("Sending request: {}", request_json);
 
         // リクエスト送信
         stream.write_all(request_json.as_bytes()).await?;
@@ -47,7 +47,7 @@ impl CodeIntelClient {
         let response: ServerResponse = serde_json::from_str(response_line.trim())
             .context("Failed to parse response")?;
 
-        debug!("Received response: {:?}", response);
+        // debug!("Received response: {:?}", response);
 
         if let Some(error) = response.error {
             return Err(anyhow::anyhow!("Server error: {}", error));

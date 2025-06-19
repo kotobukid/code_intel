@@ -120,6 +120,27 @@ impl RustParser {
     pub fn get_all_functions(&self) -> &HashMap<String, Vec<FunctionInfo>> {
         &self.functions
     }
+
+    /// 指定ファイルの関数をすべて削除（ファイル監視用）
+    pub fn remove_file_functions(&mut self, file_path: &str) {
+        // 各関数名について、該当ファイルの関数を削除
+        let mut function_names_to_remove = Vec::new();
+        
+        for (func_name, func_infos) in self.functions.iter_mut() {
+            // このファイルに属する関数を除外
+            func_infos.retain(|info| info.file_path != file_path);
+            
+            // 関数リストが空になったら、関数名も削除
+            if func_infos.is_empty() {
+                function_names_to_remove.push(func_name.clone());
+            }
+        }
+        
+        // 空になった関数名を削除
+        for func_name in function_names_to_remove {
+            self.functions.remove(&func_name);
+        }
+    }
 }
 
 #[cfg(test)]

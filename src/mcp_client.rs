@@ -42,13 +42,12 @@ impl McpClient {
         }
     }
 
-    /// stdio transport で MCP クライアントを開始
+    /// stdio transport で MCP クライアントを開始（REPLモード）
     pub async fn run_stdio(&self) -> Result<()> {
-        info!("Starting MCP client, connecting to server on port {}", self.port);
+        // MCP通信中はログを無効化（stdoutをクリーンに保つため）
         
         // サーバーが起動しているかチェック
         if !self.client.is_server_running().await {
-            error!("code_intel server is not running on port {}. Please start it with: code_intel serve", self.port);
             std::process::exit(1);
         }
 
@@ -56,42 +55,55 @@ impl McpClient {
         let mut stdout = tokio::io::stdout();
         let mut reader = BufReader::new(stdin).lines();
 
-        while let Some(line) = reader.next_line().await? {
-            if line.trim().is_empty() {
-                continue;
-            }
-
-            debug!("Received MCP request: {}", line);
-
-            match self.handle_mcp_message(&line).await {
-                Ok(Some(response)) => {
-                    let response_str = serde_json::to_string(&response)?;
-                    debug!("Sending MCP response: {}", response_str);
+        loop {
+            match reader.next_line().await? {
+                Some(line) => {
+                    let trimmed = line.trim();
                     
-                    stdout.write_all(response_str.as_bytes()).await?;
-                    stdout.write_all(b"\n").await?;
-                    stdout.flush().await?;
-                }
-                Ok(None) => {
-                    // Notification (応答なし)
-                }
-                Err(e) => {
-                    error!("Error handling MCP message: {}", e);
-                    let error_response = JsonRpcResponse {
-                        jsonrpc: "2.0".to_string(),
-                        result: None,
-                        error: Some(JsonRpcError {
-                            code: -32603,
-                            message: format!("Internal error: {}", e),
-                            data: None,
-                        }),
-                        id: None,
-                    };
+                    // 終了コマンドチェック
+                    if trimmed == "/quit" || trimmed == "/exit" {
+                        break;
+                    }
                     
-                    let response_str = serde_json::to_string(&error_response)?;
-                    stdout.write_all(response_str.as_bytes()).await?;
-                    stdout.write_all(b"\n").await?;
-                    stdout.flush().await?;
+                    // 空行スキップ
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+
+                    
+                    match self.handle_mcp_message(trimmed).await {
+                        Ok(Some(response)) => {
+                            let response_str = serde_json::to_string(&response)?;
+                            stdout.write_all(response_str.as_bytes()).await?;
+                            stdout.write_all(b"\n").await?;
+                            stdout.flush().await?;
+                        }
+                        Ok(None) => {
+                            // Notification (応答なし)
+                        }
+                        Err(e) => {
+                            // エラーは無視（MCPプロトコル維持のため）
+                            let error_response = JsonRpcResponse {
+                                jsonrpc: "2.0".to_string(),
+                                result: None,
+                                error: Some(JsonRpcError {
+                                    code: -32603,
+                                    message: format!("Internal error: {}", e),
+                                    data: None,
+                                }),
+                                id: None,
+                            };
+                            
+                            let response_str = serde_json::to_string(&error_response)?;
+                            stdout.write_all(response_str.as_bytes()).await?;
+                            stdout.write_all(b"\n").await?;
+                            stdout.flush().await?;
+                        }
+                    }
+                }
+                None => {
+                    // stdin closed (EOF)
+                    break;
                 }
             }
         }
@@ -103,7 +115,7 @@ impl McpClient {
         let request: JsonRpcRequest = serde_json::from_str(message)
             .context("Failed to parse JSON-RPC request")?;
 
-        debug!("Handling MCP method: {}", request.method);
+        // debug!("Handling MCP method: {}", request.method);
 
         let response = match request.method.as_str() {
             "initialize" => self.handle_initialize(&request).await?,
@@ -111,11 +123,24 @@ impl McpClient {
             "tools/call" => self.handle_tools_call(&request).await?,
             "resources/list" => self.handle_resources_list(&request).await?,
             method if method.starts_with("notifications/") => {
-                debug!("Received notification: {}", method);
+                // notification処理（応答不要）
                 return Ok(None);
             }
+            "initialized" => {
+                // initialized notification（応答不要）
+                return Ok(None);
+            }
+            "ping" => {
+                // ping要求に対してpong応答
+                JsonRpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    result: Some(json!({})),
+                    error: None,
+                    id: request.id.clone(),
+                }
+            }
             _ => {
-                warn!("Unknown MCP method: {}", request.method);
+                // Unknown method - silent ignore
                 JsonRpcResponse {
                     jsonrpc: "2.0".to_string(),
                     result: None,
@@ -133,7 +158,7 @@ impl McpClient {
     }
 
     async fn handle_initialize(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
-        info!("Initializing MCP client");
+        // info!("Initializing MCP client");
         
         let capabilities = json!({
             "tools": {
@@ -228,7 +253,7 @@ impl McpClient {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing function_name parameter"))?;
 
-        info!("Finding definition for function: {}", function_name);
+        // info!("Finding definition for function: {}", function_name);
 
         // サーバーに問い合わせ
         let server_result = self.client.find_definition(function_name).await?;
