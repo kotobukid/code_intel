@@ -74,6 +74,17 @@ cargo build --release
 
 # MCP登録
 claude mcp add code-intel -- /path/to/target/release/code_intel mcp-client
+
+# 例：プロジェクトディレクトリが /home/user/code_intel の場合
+claude mcp add code-intel -- /home/user/code_intel/target/release/code_intel mcp-client
+
+# または、プロジェクトディレクトリから実行する場合
+claude mcp add code-intel -- $(pwd)/target/release/code_intel mcp-client
+
+# 注意事項:
+# - 必ず `cargo build --release` でリリースビルドを作成してから登録
+# - 絶対パスを使用すること（相対パスは動作しない場合がある）
+# - バイナリ名は code_intel（アンダースコア付き）
 ```
 
 ## 開発上の注意点
