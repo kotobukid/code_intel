@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
-use syn::{File, Item, ItemFn, Signature, Visibility};
+use syn::{File, Item, ItemFn, Signature, Visibility, spanned::Spanned};
 use anyhow::{Context, Result};
 
 #[derive(Debug, Clone)]
@@ -32,14 +32,14 @@ impl RustParser {
         let syntax_tree = syn::parse_file(&content)
             .with_context(|| format!("Failed to parse file: {}", file_path.display()))?;
 
-        self.extract_functions(&syntax_tree, file_path.to_string_lossy().to_string())?;
+        self.extract_functions(&syntax_tree, file_path.to_string_lossy().to_string(), &content)?;
         Ok(())
     }
 
-    fn extract_functions(&mut self, syntax_tree: &File, file_path: String) -> Result<()> {
+    fn extract_functions(&mut self, syntax_tree: &File, file_path: String, content: &str) -> Result<()> {
         for item in &syntax_tree.items {
             if let Item::Fn(item_fn) = item {
-                let func_info = self.extract_function_info(item_fn, &file_path)?;
+                let func_info = self.extract_function_info(item_fn, &file_path, content)?;
                 
                 // 関数名でグループ化（オーバーロードは考慮しない）
                 self.functions
@@ -51,16 +51,14 @@ impl RustParser {
         Ok(())
     }
 
-    fn extract_function_info(&self, item_fn: &ItemFn, file_path: &str) -> Result<FunctionInfo> {
+    fn extract_function_info(&self, item_fn: &ItemFn, file_path: &str, content: &str) -> Result<FunctionInfo> {
         let name = item_fn.sig.ident.to_string();
         let signature = self.format_signature(&item_fn.sig);
         let visibility = self.format_visibility(&item_fn.vis);
         
-        // syn の span から行番号を取得（1ベース）
-        // 注意: proc_macro2::Span は行番号情報を直接提供しないため、
-        // とりあえず1を設定（将来的には別の方法で取得）
-        let line = 1;
-        let column = 0;
+        // 関数定義の行番号を見つける
+        // "fn 関数名" のパターンを検索
+        let (line, column) = self.find_function_location(&name, content, &visibility);
 
         Ok(FunctionInfo {
             name,
@@ -119,6 +117,38 @@ impl RustParser {
 
     pub fn get_all_functions(&self) -> &HashMap<String, Vec<FunctionInfo>> {
         &self.functions
+    }
+
+    /// 関数の位置を見つける
+    fn find_function_location(&self, func_name: &str, content: &str, visibility: &str) -> (usize, usize) {
+        let lines: Vec<&str> = content.lines().collect();
+        
+        // 各行を検索して関数定義を見つける
+        for (line_idx, line) in lines.iter().enumerate() {
+            let trimmed = line.trim();
+            
+            // 関数定義のパターンをチェック
+            // 例: "fn main", "pub fn new", "pub(crate) fn test", "async fn process"
+            if (trimmed.starts_with("fn ") && trimmed[3..].trim_start().starts_with(func_name))
+                || (trimmed.starts_with("pub fn ") && trimmed[7..].trim_start().starts_with(func_name))
+                || (trimmed.starts_with("pub(crate) fn ") && trimmed[14..].trim_start().starts_with(func_name))
+                || (trimmed.starts_with("pub(super) fn ") && trimmed[14..].trim_start().starts_with(func_name))
+                || (trimmed.contains("async fn ") && {
+                    let async_pos = trimmed.find("async fn ").unwrap();
+                    trimmed[async_pos + 9..].trim_start().starts_with(func_name)
+                })
+                || (trimmed.contains("pub async fn ") && {
+                    let async_pos = trimmed.find("pub async fn ").unwrap();
+                    trimmed[async_pos + 13..].trim_start().starts_with(func_name)
+                }) {
+                // 行番号は1ベース、列番号は関数名の開始位置
+                let col = line.find(func_name).unwrap_or(0);
+                return (line_idx + 1, col);
+            }
+        }
+        
+        // 見つからない場合のフォールバック
+        (1, 0)
     }
 
     /// 指定ファイルの関数をすべて削除（ファイル監視用）
