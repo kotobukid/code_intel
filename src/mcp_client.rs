@@ -17,7 +17,9 @@ pub struct JsonRpcRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcResponse {
     pub jsonrpc: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<JsonRpcError>,
     pub id: Option<Value>,
 }
@@ -46,18 +48,26 @@ impl McpClient {
     pub async fn run_stdio(&self) -> Result<()> {
         // MCP通信中はログを無効化（stdoutをクリーンに保つため）
         
-        // サーバーが起動しているかチェック
-        if !self.client.is_server_running().await {
-            std::process::exit(1);
-        }
+        // デバッグ用: 起動確認をstderrに出力（無効化）
+        // eprintln!("[MCP] Starting MCP client on stdin/stdout");
+        
+        // サーバーが起動しているかチェック（ただし継続して動作）
+        let _server_available = self.client.is_server_running().await;
 
         let stdin = tokio::io::stdin();
         let mut stdout = tokio::io::stdout();
         let mut reader = BufReader::new(stdin).lines();
 
+        // 初回のメッセージを待つ（タイムアウトあり）
+        let mut first_message = true;
+        
         loop {
             match reader.next_line().await? {
                 Some(line) => {
+                    if first_message {
+                        // eprintln!("[MCP] Received first message");
+                        first_message = false;
+                    }
                     let trimmed = line.trim();
                     
                     // 終了コマンドチェック
@@ -73,6 +83,7 @@ impl McpClient {
                     
                     match self.handle_mcp_message(trimmed).await {
                         Ok(Some(response)) => {
+                            // コンパクトなJSON出力（改行や余分なスペースを削除）
                             let response_str = serde_json::to_string(&response)?;
                             stdout.write_all(response_str.as_bytes()).await?;
                             stdout.write_all(b"\n").await?;
@@ -103,11 +114,13 @@ impl McpClient {
                 }
                 None => {
                     // stdin closed (EOF)
+                    // eprintln!("[MCP] stdin closed (EOF), exiting");
                     break;
                 }
             }
         }
 
+        // eprintln!("[MCP] MCP client shutting down");
         Ok(())
     }
 
@@ -254,6 +267,21 @@ impl McpClient {
             .ok_or_else(|| anyhow::anyhow!("Missing function_name parameter"))?;
 
         // info!("Finding definition for function: {}", function_name);
+
+        // サーバーが起動しているかチェック
+        if !self.client.is_server_running().await {
+            return Ok(JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                result: Some(json!({
+                    "content": [{
+                        "type": "text",
+                        "text": "Error: Code intelligence server is not running. Please start the server with 'cargo run -- serve' before using this tool."
+                    }]
+                })),
+                error: None,
+                id: request_id.clone(),
+            });
+        }
 
         // サーバーに問い合わせ
         let server_result = self.client.find_definition(function_name).await?;

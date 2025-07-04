@@ -59,13 +59,16 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    // ログの初期化
-    fmt()
-        .with_env_filter(EnvFilter::new("code_intel=debug,info"))
-        .with_writer(std::io::stderr) // stderrにログを出力
-        .init();
-
     let cli = Cli::parse();
+    
+    // MCPクライアントモードではログを初期化しない
+    if !matches!(cli.command, Commands::McpClient { .. }) {
+        // ログの初期化
+        fmt()
+            .with_env_filter(EnvFilter::new("code_intel=debug,info"))
+            .with_writer(std::io::stderr) // stderrにログを出力
+            .init();
+    }
 
     let result = match cli.command {
         Commands::Serve { project_path, port, web_ui, web_port } => {

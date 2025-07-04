@@ -142,17 +142,56 @@ claude mcp add code-intel -- $(pwd)/target/release/code_intel mcp-client
 - クラスター対応
 - API制限
 
+## MCP実装の重要な注意点
+
+### 「数秒でおかしくなる」問題の原因と解決
+
+#### 問題の症状
+- Claude CodeでMCPサーバーが「接続中...」から「失敗」になる
+- 30秒後にタイムアウトエラーが発生
+- MCPプロセスは起動しているが通信できない
+
+#### 根本原因
+1. **JSON-RPCレスポンスの形式問題**
+   - `error: null`を含むとClaude CLIが正しく解析できない
+   - 解決: `#[serde(skip_serializing_if = "Option::is_none")]`を使用
+
+2. **ログ出力の干渉**
+   - stdoutへのログ出力がJSON-RPC通信を妨害
+   - 解決: MCPクライアントモードでは完全にログを無効化
+
+#### 実装時の必須事項
+```rust
+// 1. main.rsでMCPモード時のログ無効化
+if !matches!(cli.command, Commands::McpClient { .. }) {
+    // 通常モードのみログ初期化
+}
+
+// 2. JSON-RPCレスポンスでnullフィールドを除外
+#[derive(Serialize)]
+struct JsonRpcResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<JsonRpcError>,
+    // ...
+}
+
+// 3. MCPモードではstderrへの出力も禁止
+// eprintln!() は使用しない
+```
+
 ## トラブルシューティング
 
 ### よくある問題
 1. **ポート競合**: 7777/8080が使用中の場合は`--port`オプション使用
 2. **権限エラー**: プロジェクトディレクトリの読み取り権限確認
 3. **ビルドエラー**: Rust 2024 edition対応のコンパイラ使用
+4. **MCP接続エラー**: 上記「MCP実装の重要な注意点」参照
 
 ### デバッグ方法
 1. Web UI (http://localhost:8080) でリアルタイムログ確認
 2. `cargo run -- status` でサーバー状態確認
-3. `RUST_LOG=debug` で詳細ログ出力
+3. `RUST_LOG=debug` で詳細ログ出力（MCPモード以外）
+4. MCPログ確認: `~/.cache/claude-cli-nodejs/*/mcp-logs-code-intel/`
 
 ## 性能実績
 - **テストケース**: 15関数、4ファイル
