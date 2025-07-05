@@ -17,6 +17,18 @@ pub type LogSender = broadcast::Sender<String>;
 pub type LogReceiver = broadcast::Receiver<String>;
 
 #[derive(Clone)]
+struct StatsData {
+    indexed_files_count: usize,
+    total_symbols: usize,
+    total_functions: usize,
+    total_structs: usize,
+    total_enums: usize,
+    total_traits: usize,
+    unique_symbol_names: usize,
+    is_watching: bool,
+}
+
+#[derive(Clone)]
 pub struct WebUIState {
     pub log_sender: LogSender,
 }
@@ -29,7 +41,7 @@ pub struct WebUIServer {
 use tokio::sync::RwLock;
 
 lazy_static::lazy_static! {
-    static ref CURRENT_STATS: Arc<RwLock<Option<(usize, usize, usize, bool)>>> = Arc::new(RwLock::new(None));
+    static ref CURRENT_STATS: Arc<RwLock<Option<StatsData>>> = Arc::new(RwLock::new(None));
 }
 
 impl WebUIServer {
@@ -165,11 +177,11 @@ async fn dashboard() -> impl IntoResponse {
             <div id="file-count">-</div>
         </div>
         <div class="stat-card">
-            <h3>⚙️ Total Functions</h3>
+            <h3>🔍 Total Symbols</h3>
             <div id="function-count">-</div>
         </div>
         <div class="stat-card">
-            <h3>🔍 Unique Names</h3>
+            <h3>📊 Unique Names</h3>
             <div id="unique-count">-</div>
         </div>
         <div class="stat-card">
@@ -281,13 +293,13 @@ async fn dashboard() -> impl IntoResponse {
                 console.log('Updating file-count to:', stats.indexed_files_count);
                 fileCountEl.textContent = stats.indexed_files_count;
             }
-            if (stats.total_functions !== undefined && functionCountEl) {
-                console.log('Updating function-count to:', stats.total_functions);
-                functionCountEl.textContent = stats.total_functions;
+            if (stats.total_symbols !== undefined && functionCountEl) {
+                console.log('Updating function-count to:', stats.total_symbols);
+                functionCountEl.textContent = stats.total_symbols;
             }
-            if (stats.unique_function_names !== undefined && uniqueCountEl) {
-                console.log('Updating unique-count to:', stats.unique_function_names);
-                uniqueCountEl.textContent = stats.unique_function_names;
+            if (stats.unique_symbol_names !== undefined && uniqueCountEl) {
+                console.log('Updating unique-count to:', stats.unique_symbol_names);
+                uniqueCountEl.textContent = stats.unique_symbol_names;
             }
             if (stats.is_watching !== undefined && watchStatusEl) {
                 console.log('Updating watch-status to:', stats.is_watching);
@@ -348,13 +360,13 @@ async fn websocket_connection(socket: WebSocket, state: WebUIState) {
     }
     
     // 保存されている統計情報があれば送信
-    if let Some((indexed_files, total_functions, unique_names, is_watching)) = *CURRENT_STATS.read().await {
+    if let Some(stats_data) = CURRENT_STATS.read().await.as_ref() {
         let stats_message = json!({
             "type": "stats",
-            "indexed_files_count": indexed_files,
-            "total_functions": total_functions,
-            "unique_function_names": unique_names,
-            "is_watching": is_watching
+            "indexed_files_count": stats_data.indexed_files_count,
+            "total_symbols": stats_data.total_symbols,
+            "unique_symbol_names": stats_data.unique_symbol_names,
+            "is_watching": stats_data.is_watching
         });
         
         if let Err(e) = ws_sender.send(Message::Text(stats_message.to_string())).await {
@@ -429,18 +441,29 @@ impl LogBroadcaster {
         let _ = self.sender.send(message);
     }
 
-    pub fn send_stats(&self, indexed_files: usize, total_functions: usize, unique_names: usize, is_watching: bool) {
+    pub fn send_stats(&self, indexed_files: usize, total_symbols: usize, unique_names: usize, is_watching: bool) {
         // グローバル統計を更新
+        let stats_data = StatsData {
+            indexed_files_count: indexed_files,
+            total_symbols,
+            total_functions: 0,  // TODO: 個別の統計を受け取るように改善
+            total_structs: 0,
+            total_enums: 0,
+            total_traits: 0,
+            unique_symbol_names: unique_names,
+            is_watching,
+        };
+        
         tokio::spawn(async move {
             let mut stats = CURRENT_STATS.write().await;
-            *stats = Some((indexed_files, total_functions, unique_names, is_watching));
+            *stats = Some(stats_data.clone());
         });
         
         let stats_message = json!({
             "type": "stats",
             "indexed_files_count": indexed_files,
-            "total_functions": total_functions,
-            "unique_function_names": unique_names,
+            "total_symbols": total_symbols,
+            "unique_symbol_names": unique_names,
             "is_watching": is_watching
         });
         let _ = self.sender.send(stats_message.to_string());

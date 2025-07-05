@@ -23,3 +23,7 @@ pub async fn async_function() -> Result<String, Box<dyn std::error::Error>> {
 fn double_value(x: i32) -> i32 {
     x * 2
 }
+
+trait Hoge {
+    fn call(&self);
+}

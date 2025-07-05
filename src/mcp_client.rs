@@ -176,16 +176,21 @@ impl McpClient {
         let capabilities = json!({
             "tools": {
                 "find_definition": {
-                    "description": "Find function definition by name",
+                    "description": "Find symbol definition by name (functions, structs, enums, traits)",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
-                            "function_name": {
+                            "symbol_name": {
                                 "type": "string",
-                                "description": "Name of the function to find"
+                                "description": "Name of the symbol to find"
+                            },
+                            "symbol_type": {
+                                "type": "string",
+                                "description": "Type of symbol to search for (Function, Struct, Enum, Trait). If not specified, searches all types.",
+                                "enum": ["Function", "Struct", "Enum", "Trait"]
                             }
                         },
-                        "required": ["function_name"]
+                        "required": ["symbol_name"]
                     }
                 }
             },
@@ -212,16 +217,21 @@ impl McpClient {
         let tools = json!([
             {
                 "name": "find_definition",
-                "description": "Find function definition by name",
+                "description": "Find symbol definition by name (functions, structs, enums, traits)",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "function_name": {
+                        "symbol_name": {
                             "type": "string",
-                            "description": "Name of the function to find"
+                            "description": "Name of the symbol to find"
+                        },
+                        "symbol_type": {
+                            "type": "string",
+                            "description": "Type of symbol to search for (Function, Struct, Enum, Trait). If not specified, searches all types.",
+                            "enum": ["Function", "Struct", "Enum", "Trait"]
                         }
                     },
-                    "required": ["function_name"]
+                    "required": ["symbol_name"]
                 }
             }
         ]);
@@ -262,11 +272,18 @@ impl McpClient {
     }
 
     async fn handle_find_definition_tool(&self, arguments: &Value, request_id: &Option<Value>) -> Result<JsonRpcResponse> {
-        let function_name = arguments.get("function_name")
+        // 後方互換性のため、function_nameも受け付ける
+        let symbol_name = arguments.get("symbol_name")
+            .or_else(|| arguments.get("function_name"))
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing function_name parameter"))?;
+            .ok_or_else(|| anyhow::anyhow!("Missing symbol_name parameter"))?;
+        
+        // symbol_typeパラメータを取得
+        let symbol_type = arguments.get("symbol_type")
+            .and_then(|v| v.as_str())
+            .and_then(|s| serde_json::from_value::<protocol::SymbolType>(json!(s)).ok());
 
-        // info!("Finding definition for function: {}", function_name);
+        // info!("Finding definition for symbol: {} (type: {:?})", symbol_name, symbol_type);
 
         // サーバーが起動しているかチェック
         if !self.client.is_server_running().await {
@@ -275,7 +292,7 @@ impl McpClient {
                 result: Some(json!({
                     "content": [{
                         "type": "text",
-                        "text": "Error: Code intelligence server is not running. Please start the server with 'cargo run -- serve' before using this tool."
+                        "text": "Error: Code intelligence server is not running. Please start the server with 'code_intel serve' before using this tool."
                     }]
                 })),
                 error: None,
@@ -284,7 +301,7 @@ impl McpClient {
         }
 
         // サーバーに問い合わせ
-        let server_result = self.client.find_definition(function_name).await?;
+        let server_result = self.client.find_definition_with_type(symbol_name, symbol_type).await?;
         
         // protocol::FindDefinitionResponse をパース
         let find_response: protocol::FindDefinitionResponse = serde_json::from_value(server_result)?;
@@ -293,7 +310,7 @@ impl McpClient {
             json!({
                 "content": [{
                     "type": "text",
-                    "text": format!("No definition found for function '{}'", function_name)
+                    "text": format!("No definition found for symbol '{}'", symbol_name)
                 }]
             })
         } else {
@@ -301,9 +318,9 @@ impl McpClient {
             json!({
                 "content": [{
                     "type": "text",
-                    "text": format!("Found {} definition(s) for function '{}':\n\n{}", 
+                    "text": format!("Found {} definition(s) for symbol '{}':\n\n{}", 
                                   find_response.definitions.len(), 
-                                  function_name,
+                                  symbol_name,
                                   definitions_text)
                 }]
             })

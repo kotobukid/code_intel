@@ -1,4 +1,4 @@
-use crate::protocol::{self, ServerRequest, ServerResponse, FindDefinitionParams};
+use crate::protocol::{self, ServerRequest, ServerResponse, FindDefinitionParams, SymbolType};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -56,10 +56,16 @@ impl CodeIntelClient {
         Ok(response)
     }
 
-    /// 関数定義を検索
+    /// シンボル定義を検索（互換性のための旧API）
     pub async fn find_definition(&self, function_name: &str) -> Result<Value> {
+        self.find_definition_with_type(function_name, Some(SymbolType::Function)).await
+    }
+    
+    /// シンボル定義を検索（型指定付き）
+    pub async fn find_definition_with_type(&self, symbol_name: &str, symbol_type: Option<SymbolType>) -> Result<Value> {
         let params = serde_json::to_value(FindDefinitionParams {
-            function_name: function_name.to_string(),
+            symbol_name: symbol_name.to_string(),
+            symbol_type,
         })?;
 
         let response = self.send_request(protocol::methods::FIND_DEFINITION, params).await?;

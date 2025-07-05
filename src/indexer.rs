@@ -1,4 +1,5 @@
-use crate::parser::{RustParser, FunctionInfo};
+use crate::parser::{RustParser, SymbolInfo};
+use crate::protocol::SymbolType;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
@@ -34,13 +35,11 @@ impl CodeIndexer {
 
         self.walk_directory(dir_path)?;
         
-        let total_functions: usize = self.parser.get_all_functions()
-            .values()
-            .map(|funcs| funcs.len())
-            .sum();
+        let stats = self.get_stats();
         
-        info!("Indexing completed. Found {} functions in {} files", 
-              total_functions, self.indexed_files.len());
+        info!("Indexing completed. Found {} symbols ({} functions, {} structs, {} enums, {} traits) in {} files", 
+              stats.total_symbols, stats.total_functions, stats.total_structs, 
+              stats.total_enums, stats.total_traits, stats.indexed_files_count);
         
         Ok(())
     }
@@ -75,29 +74,47 @@ impl CodeIndexer {
         Ok(())
     }
 
-    /// 関数定義を検索
-    pub fn find_definition(&self, function_name: &str) -> Option<&Vec<FunctionInfo>> {
-        self.parser.find_function(function_name)
+    /// シンボル定義を検索
+    pub fn find_definition(&self, symbol_name: &str, symbol_type: Option<SymbolType>) -> Option<Vec<&SymbolInfo>> {
+        self.parser.find_symbol(symbol_name, symbol_type)
     }
 
-    /// すべての関数情報を取得
-    pub fn get_all_functions(&self) -> &HashMap<String, Vec<FunctionInfo>> {
-        self.parser.get_all_functions()
+    /// すべてのシンボル情報を取得
+    pub fn get_all_symbols(&self) -> &HashMap<String, Vec<SymbolInfo>> {
+        self.parser.get_all_symbols()
     }
 
     /// インデックス統計を取得
     pub fn get_stats(&self) -> IndexStats {
-        let total_functions: usize = self.parser.get_all_functions()
-            .values()
-            .map(|funcs| funcs.len())
-            .sum();
+        let all_symbols = self.parser.get_all_symbols();
         
-        let unique_function_names = self.parser.get_all_functions().len();
+        let mut total_functions = 0;
+        let mut total_structs = 0;
+        let mut total_enums = 0;
+        let mut total_traits = 0;
+        
+        for symbols in all_symbols.values() {
+            for symbol in symbols {
+                match symbol.symbol_type {
+                    SymbolType::Function => total_functions += 1,
+                    SymbolType::Struct => total_structs += 1,
+                    SymbolType::Enum => total_enums += 1,
+                    SymbolType::Trait => total_traits += 1,
+                }
+            }
+        }
+        
+        let total_symbols = total_functions + total_structs + total_enums + total_traits;
+        let unique_symbol_names = all_symbols.len();
         let indexed_files_count = self.indexed_files.len();
 
         IndexStats {
+            total_symbols,
             total_functions,
-            unique_function_names,
+            total_structs,
+            total_enums,
+            total_traits,
+            unique_symbol_names,
             indexed_files_count,
             is_watching: self.watcher.is_some(),
         }
@@ -148,11 +165,11 @@ impl CodeIndexer {
                     if self.is_rust_file(&path) {
                         info!("File changed, re-indexing: {}", path.display());
                         
-                        // 変更前の関数を記録
-                        let old_functions: Vec<String> = self.parser.get_all_functions()
+                        // 変更前のシンボルを記録
+                        let old_symbols: Vec<String> = self.parser.get_all_symbols()
                             .iter()
-                            .filter(|(_, funcs)| {
-                                funcs.iter().any(|f| f.file_path == path.to_string_lossy())
+                            .filter(|(_, symbols)| {
+                                symbols.iter().any(|s| s.file_path == path.to_string_lossy())
                             })
                             .map(|(name, _)| name.clone())
                             .collect();
@@ -160,19 +177,19 @@ impl CodeIndexer {
                         // ファイルを再インデックス
                         self.reindex_file(&path)?;
                         
-                        // 変更後の関数を記録
-                        let new_functions: Vec<String> = self.parser.get_all_functions()
+                        // 変更後のシンボルを記録
+                        let new_symbols: Vec<String> = self.parser.get_all_symbols()
                             .iter()
-                            .filter(|(_, funcs)| {
-                                funcs.iter().any(|f| f.file_path == path.to_string_lossy())
+                            .filter(|(_, symbols)| {
+                                symbols.iter().any(|s| s.file_path == path.to_string_lossy())
                             })
                             .map(|(name, _)| name.clone())
                             .collect();
 
-                        // 変更された関数名を記録
-                        for func_name in old_functions.iter().chain(new_functions.iter()) {
-                            if !updated_functions.contains(func_name) {
-                                updated_functions.push(func_name.clone());
+                        // 変更されたシンボル名を記録
+                        for symbol_name in old_symbols.iter().chain(new_symbols.iter()) {
+                            if !updated_functions.contains(symbol_name) {
+                                updated_functions.push(symbol_name.clone());
                             }
                         }
                     }
@@ -183,11 +200,11 @@ impl CodeIndexer {
                     if self.is_rust_file(&path) {
                         info!("File removed, cleaning index: {}", path.display());
                         
-                        // 削除されたファイルの関数を記録
-                        let removed_functions: Vec<String> = self.parser.get_all_functions()
+                        // 削除されたファイルのシンボルを記録
+                        let removed_symbols: Vec<String> = self.parser.get_all_symbols()
                             .iter()
-                            .filter(|(_, funcs)| {
-                                funcs.iter().any(|f| f.file_path == path.to_string_lossy())
+                            .filter(|(_, symbols)| {
+                                symbols.iter().any(|s| s.file_path == path.to_string_lossy())
                             })
                             .map(|(name, _)| name.clone())
                             .collect();
@@ -195,7 +212,7 @@ impl CodeIndexer {
                         // インデックスから削除
                         self.remove_file_from_index(&path);
                         
-                        updated_functions.extend(removed_functions);
+                        updated_functions.extend(removed_symbols);
                     }
                 }
             }
@@ -225,8 +242,8 @@ impl CodeIndexer {
         let file_path = file_path.as_ref();
         let file_path_str = file_path.to_string_lossy();
         
-        // パーサーから該当ファイルの関数を削除
-        self.parser.remove_file_functions(&file_path_str);
+        // パーサーから該当ファイルのシンボルを削除
+        self.parser.remove_file_symbols(&file_path_str);
         
         // インデックスファイル記録からも削除
         self.indexed_files.remove(file_path);
@@ -282,16 +299,21 @@ impl CodeIndexer {
 
 #[derive(Debug)]
 pub struct IndexStats {
+    pub total_symbols: usize,
     pub total_functions: usize,
-    pub unique_function_names: usize,
+    pub total_structs: usize,
+    pub total_enums: usize,
+    pub total_traits: usize,
+    pub unique_symbol_names: usize,
     pub indexed_files_count: usize,
     pub is_watching: bool,
 }
 
 impl std::fmt::Display for IndexStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "IndexStats {{ total_functions: {}, unique_names: {}, files: {}, watching: {} }}", 
-               self.total_functions, self.unique_function_names, self.indexed_files_count, self.is_watching)
+        write!(f, "IndexStats {{ total_symbols: {}, functions: {}, structs: {}, enums: {}, traits: {}, unique_names: {}, files: {}, watching: {} }}", 
+               self.total_symbols, self.total_functions, self.total_structs, self.total_enums, 
+               self.total_traits, self.unique_symbol_names, self.indexed_files_count, self.is_watching)
     }
 }
 
@@ -331,7 +353,7 @@ pub fn library_function(x: i32) -> i32 {
         assert_eq!(stats.is_watching, false);
 
         // main関数を検索
-        let main_funcs = indexer.find_definition("main").unwrap();
+        let main_funcs = indexer.find_definition("main", Some(SymbolType::Function)).unwrap();
         assert_eq!(main_funcs.len(), 1);
         assert_eq!(main_funcs[0].name, "main");
     }

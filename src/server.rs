@@ -1,5 +1,5 @@
 use crate::indexer::{CodeIndexer, FileWatchReceiver};
-use crate::protocol::{self, ServerRequest, ServerResponse, FindDefinitionParams, FindDefinitionResponse, StatsResponse};
+use crate::protocol::{self, ServerRequest, ServerResponse, FindDefinitionParams, FindDefinitionResponse, StatsResponse, SymbolDefinition};
 use crate::web_ui::{WebUIServer, LogSender, LogBroadcaster};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -127,8 +127,8 @@ impl CodeIntelServer {
                         let stats = indexer_guard.get_stats();
                         broadcaster.send_stats(
                             stats.indexed_files_count,
-                            stats.total_functions,
-                            stats.unique_function_names,
+                            stats.total_symbols,
+                            stats.unique_symbol_names,
                             stats.is_watching,
                         );
                     }
@@ -195,13 +195,17 @@ impl CodeIntelServer {
             .context("Invalid find_definition parameters")?;
 
         let indexer_guard = indexer.lock().await;
-        let definitions = indexer_guard.find_definition(&params.function_name);
+        
+        // 後方互換性のため、function_nameもサポート
+        let symbol_name = &params.symbol_name;
+        
+        let definitions = indexer_guard.find_definition(symbol_name, params.symbol_type);
 
         let response = match definitions {
-            Some(funcs) => {
-                let definitions: Vec<protocol::FunctionDefinition> = funcs
-                    .iter()
-                    .map(|func| func.clone().into())
+            Some(symbols) => {
+                let definitions: Vec<SymbolDefinition> = symbols
+                    .into_iter()
+                    .map(|symbol| (*symbol).clone().into())
                     .collect();
                 
                 FindDefinitionResponse { definitions }
@@ -231,8 +235,8 @@ impl CodeIntelServer {
         if let Some(ref broadcaster) = self.log_broadcaster {
             broadcaster.send_stats(
                 stats.indexed_files_count,
-                stats.total_functions,
-                stats.unique_function_names,
+                stats.total_symbols,
+                stats.unique_symbol_names,
                 stats.is_watching,
             );
         }
@@ -280,8 +284,8 @@ impl CodeIntelServer {
                                 if let Some(ref broadcaster) = log_broadcaster {
                                     broadcaster.send_stats(
                                         stats.indexed_files_count,
-                                        stats.total_functions,
-                                        stats.unique_function_names,
+                                        stats.total_symbols,
+                                        stats.unique_symbol_names,
                                         stats.is_watching,
                                     );
                                 }
