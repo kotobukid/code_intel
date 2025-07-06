@@ -5,11 +5,13 @@ mod server;
 mod client;
 mod mcp_client;
 mod web_ui;
+mod graph;
 
 use clap::{Parser, Subcommand};
 use server::{CodeIntelServer, DEFAULT_PORT};
 use mcp_client::McpClient;
 use web_ui::WebUIServer;
+use graph::CallGraphGenerator;
 use tracing::{info, error};
 use tracing_subscriber::{EnvFilter, fmt};
 use std::path::PathBuf;
@@ -46,6 +48,28 @@ enum Commands {
         /// Open browser automatically when web UI is enabled
         #[arg(long)]
         open: bool,
+    },
+    /// Generate call graph visualization
+    Graph {
+        /// Project path to analyze
+        #[arg(default_value = ".")]
+        project_path: PathBuf,
+        
+        /// Focus on specific function
+        #[arg(short, long)]
+        function: Option<String>,
+        
+        /// Output format
+        #[arg(short = 'o', long, default_value = "tree")]
+        format: String,
+        
+        /// Maximum depth for call graph
+        #[arg(short, long, default_value_t = 10)]
+        depth: usize,
+        
+        /// Show only callers (reverse call graph)
+        #[arg(long)]
+        callers: bool,
     },
     /// Run as MCP client (for Claude Code integration)
     McpClient {
@@ -170,6 +194,9 @@ async fn main() -> Result<(), anyhow::Error> {
             let mcp_client = McpClient::new(port);
             mcp_client.run_stdio().await
         }
+        Commands::Graph { project_path, function, format, depth, callers } => {
+            generate_call_graph(project_path, function, format, depth, callers).await
+        }
         Commands::Status { port } => {
             check_server_status(port).await
         }
@@ -188,6 +215,40 @@ async fn check_server_status(port: u16) -> Result<(), anyhow::Error> {
     } else {
         println!("❌ Server is not running on port {port}");
         std::process::exit(1);
+    }
+    
+    Ok(())
+}
+
+async fn generate_call_graph(
+    project_path: PathBuf, 
+    function: Option<String>, 
+    format: String, 
+    depth: usize, 
+    callers: bool
+) -> Result<(), anyhow::Error> {
+    // ログは初期化しない（CLIツールとして使用）
+    
+    let mut generator = CallGraphGenerator::new();
+    generator.analyze_project(&project_path)?;
+    
+    match format.as_str() {
+        "tree" => {
+            let result = generator.generate_tree_format(function.as_deref(), depth, callers);
+            println!("{}", result);
+        }
+        "mermaid" => {
+            let result = generator.generate_mermaid_format(function.as_deref());
+            println!("{}", result);
+        }
+        "stats" => {
+            let result = generator.get_stats();
+            println!("{}", result);
+        }
+        _ => {
+            eprintln!("Unknown format: {}. Available formats: tree, mermaid, stats", format);
+            std::process::exit(1);
+        }
     }
     
     Ok(())

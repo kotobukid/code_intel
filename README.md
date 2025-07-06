@@ -29,8 +29,8 @@ AIアシスタント（Claude Code等）がコードベースを効率的に理�
 ### 提供する機能
 
 - `find_definition("symbol_name")` → 定義場所を即座に返却 ✅ 実装済み
-- `find_usages("symbol_name")` → 使用箇所のリストを返却 ✅ **NEW!** 実装済み
-- `get_call_graph("function_name")` → 呼び出し関係のグラフを返却
+- `find_usages("symbol_name")` → 使用箇所のリストを返却 ✅ 実装済み
+- `code_intel graph` → 呼び出し関係のグラフを可視化 ✅ **NEW!** 実装済み（人間用）
 - `list_symbols_in_file("path/to/file.rs")` → ファイル内の全シンボル
 - `find_implementations("trait_name")` → トレイトの実装一覧
 
@@ -99,7 +99,7 @@ AIアシスタント（Claude Code等）がコードベースを効率的に理�
     - stdio transport実装済み
     - Claude Code/Claude Desktop対応
     - `find_definition` ツール実装済み
-    - `find_usages` ツール実装済み（NEW!）
+    - `find_usages` ツール実装済み
 
 3. **リアルタイムWeb UIダッシュボード**
     - VS Code風ダークテーマ
@@ -112,7 +112,8 @@ AIアシスタント（Claude Code等）がコードベースを効率的に理�
 4. **高速コード解析エンジン**
     - synクレートによる高速パース
     - インメモリキャッシュ（HashMap）
-    - 15関数、4ファイルのプロジェクトで即座にレスポンス
+    - 関数呼び出し関係の解析とコールグラフ生成
+    - 30シンボル、6ファイルのプロジェクトで即座にレスポンス
 
 5. **効率的なファイル監視システム**
     - **Rustファイル専用監視**: `*.rs`ファイルのみを監視対象に限定
@@ -124,6 +125,12 @@ AIアシスタント（Claude Code等）がコードベースを効率的に理�
     - **--openオプション**: Web UI起動時にブラウザを自動で開く
     - **起動時ヘルスチェック**: サービス状態の視覚的表示
     - **URL自動表示**: Web UI URLの標準出力表示
+
+7. **人間用コールグラフ可視化ツール**（NEW!）
+    - **階層表示**: ツリー形式での関数呼び出し関係表示
+    - **Mermaid記法**: グラフィカルな図表生成
+    - **統計情報**: 関数数、呼び出し数、エントリーポイント等
+    - **フィルタリング**: 特定関数や深度制限での絞り込み
 
 ### 🚀 使用方法
 
@@ -150,6 +157,11 @@ claude mcp add code-intel -- $(pwd)/target/release/code_intel mcp-client
 # - 必ず `cargo build --release` でリリースビルドを作成してから登録
 # - 絶対パスを使用すること（相対パスは動作しない場合がある）
 # - バイナリ名は code_intel（アンダースコア付き）
+
+# コールグラフ生成（人間用）
+cargo run -- graph ./my_project
+cargo run -- graph --function main ./my_project
+cargo run -- graph --format mermaid ./my_project
 
 # 状態確認
 cargo run -- status
@@ -233,8 +245,8 @@ cargo run -- serve --port 7778 --web-port 8081
 
 ### Phase 3: 機能拡張
 
-- [x] 関数使用箇所検索（find_usages）✅ **NEW!** 完了
-- [ ] コールグラフ生成・可視化
+- [x] 関数使用箇所検索（find_usages）✅ 完了
+- [x] コールグラフ生成・可視化 ✅ **NEW!** 完了（人間用CLIツール）
 - [ ] struct/enum/trait解析
 - [ ] 他言語対応（Python、TypeScript等）
 
@@ -250,7 +262,8 @@ cargo run -- serve --port 7778 --web-port 8081
 - ✅ **実証済み**: AIアシスタントのコード理解速度が劇的に向上
 - ✅ **実証済み**: 「この関数どこで使われてる？」への即答（IconRed関数で5箇所を瞬時に検出）
 - ✅ **実証済み**: rust-analyzerの起動を待つ必要なし
-- ✅ **NEW!**: 使用箇所の種類別分類（関数呼び出し、インポート、型使用等）
+- ✅ **実証済み**: 使用箇所の種類別分類（関数呼び出し、インポート、型使用等）
+- ✅ **NEW!**: 人間用コールグラフ可視化（21関数・8呼び出し関係をMermaid記法で図表化）
 - 🔄 **計画中**: 大規模リファクタリング時の影響範囲把握
 
 ## アーキテクチャ詳細

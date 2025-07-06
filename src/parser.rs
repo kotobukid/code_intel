@@ -35,14 +35,27 @@ pub enum UsageType {
     Reference,
 }
 
+#[derive(Debug, Clone)]
+pub struct CallInfo {
+    pub caller: String,
+    pub caller_file: String,
+    pub caller_line: usize,
+    pub callee: String,
+    pub call_line: usize,
+    pub call_column: usize,
+    pub call_context: String,
+}
+
 pub struct RustParser {
     symbols: HashMap<String, Vec<SymbolInfo>>,
+    call_graph: Vec<CallInfo>,
 }
 
 impl RustParser {
     pub fn new() -> Self {
         Self {
             symbols: HashMap::new(),
+            call_graph: Vec::new(),
         }
     }
 
@@ -55,6 +68,7 @@ impl RustParser {
             .with_context(|| format!("Failed to parse file: {}", file_path.display()))?;
 
         self.extract_symbols(&syntax_tree, file_path.to_string_lossy().to_string(), &content)?;
+        self.extract_function_calls(&syntax_tree, file_path.to_string_lossy().to_string(), &content)?;
         Ok(())
     }
 
@@ -254,6 +268,167 @@ impl RustParser {
         (1, 0)
     }
 
+    /// 関数呼び出し関係を抽出
+    fn extract_function_calls(&mut self, syntax_tree: &File, file_path: String, content: &str) -> Result<()> {
+        for item in &syntax_tree.items {
+            if let Item::Fn(item_fn) = item {
+                let caller_name = item_fn.sig.ident.to_string();
+                let caller_line = self.find_symbol_location(&caller_name, content, "fn").0;
+                
+                // 関数本体の中の関数呼び出しを解析
+                self.extract_calls_from_block(&item_fn.block, &caller_name, &file_path, caller_line, content);
+            }
+        }
+        Ok(())
+    }
+    
+    /// ブロック内の関数呼び出しを抽出
+    fn extract_calls_from_block(&mut self, block: &syn::Block, caller: &str, caller_file: &str, caller_line: usize, content: &str) {
+        for stmt in &block.stmts {
+            self.extract_calls_from_stmt(stmt, caller, caller_file, caller_line, content);
+        }
+    }
+    
+    /// ステートメントから関数呼び出しを抽出
+    fn extract_calls_from_stmt(&mut self, stmt: &syn::Stmt, caller: &str, caller_file: &str, caller_line: usize, content: &str) {
+        match stmt {
+            syn::Stmt::Local(local) => {
+                if let Some(init) = &local.init {
+                    self.extract_calls_from_expr(&init.expr, caller, caller_file, caller_line, content);
+                }
+            }
+            syn::Stmt::Item(_) => {
+                // アイテム内の処理は既に extract_function_calls で処理済み
+            }
+            syn::Stmt::Expr(expr, _) => {
+                self.extract_calls_from_expr(expr, caller, caller_file, caller_line, content);
+            }
+            syn::Stmt::Macro(_) => {
+                // マクロ呼び出しは現在スキップ
+            }
+        }
+    }
+    
+    /// 式から関数呼び出しを抽出
+    fn extract_calls_from_expr(&mut self, expr: &syn::Expr, caller: &str, caller_file: &str, caller_line: usize, content: &str) {
+        match expr {
+            syn::Expr::Call(call_expr) => {
+                // 関数呼び出しを発見
+                if let syn::Expr::Path(path_expr) = &*call_expr.func {
+                    if let Some(ident) = path_expr.path.get_ident() {
+                        let callee = ident.to_string();
+                        
+                        // 関数呼び出しの位置を特定
+                        let (call_line, call_column) = self.find_call_location(&callee, content, caller_line);
+                        let call_context = self.get_line_context(content, call_line);
+                        
+                        self.call_graph.push(CallInfo {
+                            caller: caller.to_string(),
+                            caller_file: caller_file.to_string(),
+                            caller_line,
+                            callee,
+                            call_line,
+                            call_column,
+                            call_context,
+                        });
+                    }
+                }
+                
+                // 引数内の関数呼び出しも再帰的に解析
+                for arg in &call_expr.args {
+                    self.extract_calls_from_expr(arg, caller, caller_file, caller_line, content);
+                }
+            }
+            syn::Expr::MethodCall(method_call) => {
+                // メソッド呼び出し
+                let method_name = method_call.method.to_string();
+                let (call_line, call_column) = self.find_call_location(&method_name, content, caller_line);
+                let call_context = self.get_line_context(content, call_line);
+                
+                self.call_graph.push(CallInfo {
+                    caller: caller.to_string(),
+                    caller_file: caller_file.to_string(),
+                    caller_line,
+                    callee: method_name,
+                    call_line,
+                    call_column,
+                    call_context,
+                });
+                
+                // レシーバーと引数も再帰的に解析
+                self.extract_calls_from_expr(&method_call.receiver, caller, caller_file, caller_line, content);
+                for arg in &method_call.args {
+                    self.extract_calls_from_expr(arg, caller, caller_file, caller_line, content);
+                }
+            }
+            syn::Expr::Block(block_expr) => {
+                self.extract_calls_from_block(&block_expr.block, caller, caller_file, caller_line, content);
+            }
+            syn::Expr::If(if_expr) => {
+                self.extract_calls_from_expr(&if_expr.cond, caller, caller_file, caller_line, content);
+                self.extract_calls_from_block(&if_expr.then_branch, caller, caller_file, caller_line, content);
+                if let Some((_, else_branch)) = &if_expr.else_branch {
+                    self.extract_calls_from_expr(else_branch, caller, caller_file, caller_line, content);
+                }
+            }
+            syn::Expr::Match(match_expr) => {
+                self.extract_calls_from_expr(&match_expr.expr, caller, caller_file, caller_line, content);
+                for arm in &match_expr.arms {
+                    self.extract_calls_from_expr(&arm.body, caller, caller_file, caller_line, content);
+                }
+            }
+            syn::Expr::Binary(binary) => {
+                self.extract_calls_from_expr(&binary.left, caller, caller_file, caller_line, content);
+                self.extract_calls_from_expr(&binary.right, caller, caller_file, caller_line, content);
+            }
+            // 他の式タイプも必要に応じて追加
+            _ => {}
+        }
+    }
+    
+    /// 関数呼び出しの位置を特定
+    fn find_call_location(&self, callee: &str, content: &str, start_line: usize) -> (usize, usize) {
+        let lines: Vec<&str> = content.lines().collect();
+        
+        // caller関数内から検索開始
+        for (line_idx, line) in lines.iter().enumerate().skip(start_line.saturating_sub(1)) {
+            if let Some(col) = line.find(&format!("{}(", callee)) {
+                return (line_idx + 1, col);
+            }
+        }
+        
+        (start_line, 0)
+    }
+    
+    /// 指定行のコンテキストを取得
+    fn get_line_context(&self, content: &str, line: usize) -> String {
+        let lines: Vec<&str> = content.lines().collect();
+        if line > 0 && line <= lines.len() {
+            lines[line - 1].trim().to_string()
+        } else {
+            String::new()
+        }
+    }
+    
+    /// コールグラフを取得
+    pub fn get_call_graph(&self) -> &Vec<CallInfo> {
+        &self.call_graph
+    }
+    
+    /// 特定関数のコールグラフを取得
+    pub fn get_calls_from_function(&self, function_name: &str) -> Vec<&CallInfo> {
+        self.call_graph.iter()
+            .filter(|call| call.caller == function_name)
+            .collect()
+    }
+    
+    /// 特定関数への呼び出しを取得
+    pub fn get_calls_to_function(&self, function_name: &str) -> Vec<&CallInfo> {
+        self.call_graph.iter()
+            .filter(|call| call.callee == function_name)
+            .collect()
+    }
+
     /// 指定ファイルのシンボルをすべて削除（ファイル監視用）
     pub fn remove_file_symbols(&mut self, file_path: &str) {
         // 各シンボル名について、該当ファイルのシンボルを削除
@@ -273,6 +448,9 @@ impl RustParser {
         for symbol_name in symbol_names_to_remove {
             self.symbols.remove(&symbol_name);
         }
+        
+        // コールグラフからも該当ファイルの情報を削除
+        self.call_graph.retain(|call| call.caller_file != file_path);
     }
 
     /// 指定シンボルの使用箇所を検索
