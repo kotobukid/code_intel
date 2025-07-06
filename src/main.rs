@@ -80,7 +80,7 @@ async fn main() -> Result<(), anyhow::Error> {
             
             if web_ui {
                 // Web UIを有効にして起動
-                let (web_server, log_sender) = WebUIServer::new();
+                let (web_server, log_sender) = WebUIServer::new(port);
                 let server = CodeIntelServer::new(project_path.clone()).with_web_ui(log_sender);
                 
                 // Web UIサーバーを別タスクで起動

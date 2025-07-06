@@ -22,6 +22,7 @@ pub mod methods {
     pub const LIST_SYMBOLS: &str = "list_symbols";
     pub const GET_STATS: &str = "get_stats";
     pub const HEALTH_CHECK: &str = "health_check";
+    pub const CHANGE_PROJECT: &str = "change_project";
 }
 
 /// シンボルの種類
@@ -68,6 +69,20 @@ pub struct StatsResponse {
     pub total_traits: usize,
     pub unique_symbol_names: usize,
     pub indexed_files_count: usize,
+}
+
+/// change_project のパラメータ
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangeProjectParams {
+    pub project_path: String,
+}
+
+/// change_project のレスポンス
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangeProjectResponse {
+    pub success: bool,
+    pub message: String,
+    pub stats: Option<StatsResponse>,
 }
 
 impl From<crate::parser::SymbolInfo> for SymbolDefinition {

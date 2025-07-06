@@ -1,5 +1,5 @@
 use crate::indexer::{CodeIndexer, FileWatchReceiver};
-use crate::protocol::{self, ServerRequest, ServerResponse, FindDefinitionParams, FindDefinitionResponse, StatsResponse, SymbolDefinition};
+use crate::protocol::{self, ServerRequest, ServerResponse, FindDefinitionParams, FindDefinitionResponse, StatsResponse, SymbolDefinition, ChangeProjectParams, ChangeProjectResponse};
 use crate::web_ui::{WebUIServer, LogSender, LogBroadcaster};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -12,7 +12,7 @@ use std::path::Path;
 
 pub struct CodeIntelServer {
     indexer: Arc<Mutex<CodeIndexer>>,
-    project_path: String,
+    project_path: Arc<Mutex<String>>,
     log_broadcaster: Option<LogBroadcaster>,
 }
 
@@ -20,7 +20,7 @@ impl CodeIntelServer {
     pub fn new<P: AsRef<Path>>(project_path: P) -> Self {
         Self {
             indexer: Arc::new(Mutex::new(CodeIndexer::new())),
-            project_path: project_path.as_ref().to_string_lossy().to_string(),
+            project_path: Arc::new(Mutex::new(project_path.as_ref().to_string_lossy().to_string())),
             log_broadcaster: None,
         }
     }
@@ -39,11 +39,12 @@ impl CodeIntelServer {
         // 初回インデックス
         {
             let mut indexer = self.indexer.lock().await;
-            let log_message = format!("Initial indexing of project: {}", self.project_path);
+            let project_path = self.project_path.lock().await.clone();
+            let log_message = format!("Initial indexing of project: {}", project_path);
             info!("{}", log_message);
             self.broadcast_log(log_message);
             
-            indexer.index_directory(&self.project_path)
+            indexer.index_directory(&project_path)
                 .context("Failed to index project")?;
             
             let stats = indexer.get_stats();
@@ -66,7 +67,7 @@ impl CodeIntelServer {
         // ファイル監視を別タスクで開始
         {
             let indexer_clone = Arc::clone(&self.indexer);
-            let project_path = self.project_path.clone();
+            let project_path = self.project_path.lock().await.clone();
             let log_broadcaster = self.log_broadcaster.clone();
             
             tokio::spawn(async move {
@@ -85,9 +86,10 @@ impl CodeIntelServer {
                     self.broadcast_log(log_message);
                     
                     let indexer = Arc::clone(&self.indexer);
+                    let project_path = Arc::clone(&self.project_path);
                     let log_broadcaster = self.log_broadcaster.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = Self::handle_client(indexer, stream, log_broadcaster).await {
+                        if let Err(e) = Self::handle_client(indexer, project_path, stream, log_broadcaster).await {
                             error!("Error handling client {}: {}", addr, e);
                         }
                     });
@@ -101,7 +103,7 @@ impl CodeIntelServer {
         }
     }
 
-    async fn handle_client(indexer: Arc<Mutex<CodeIndexer>>, mut stream: TcpStream, log_broadcaster: Option<LogBroadcaster>) -> Result<()> {
+    async fn handle_client(indexer: Arc<Mutex<CodeIndexer>>, project_path: Arc<Mutex<String>>, mut stream: TcpStream, log_broadcaster: Option<LogBroadcaster>) -> Result<()> {
         let (reader, mut writer) = stream.split();
         let mut reader = BufReader::new(reader);
         let mut line = String::new();
@@ -119,7 +121,7 @@ impl CodeIntelServer {
                 broadcaster.log(log_message);
             }
 
-            let response = match Self::handle_request(&indexer, trimmed_line).await {
+            let response = match Self::handle_request(&indexer, &project_path, trimmed_line).await {
                 Ok(response) => {
                     // 成功時に統計情報をブロードキャスト
                     if let Some(ref broadcaster) = log_broadcaster {
@@ -157,7 +159,7 @@ impl CodeIntelServer {
         Ok(())
     }
 
-    async fn handle_request(indexer: &Arc<Mutex<CodeIndexer>>, request_line: &str) -> Result<ServerResponse> {
+    async fn handle_request(indexer: &Arc<Mutex<CodeIndexer>>, project_path: &Arc<Mutex<String>>, request_line: &str) -> Result<ServerResponse> {
         let request: ServerRequest = serde_json::from_str(request_line)
             .context("Failed to parse request")?;
 
@@ -172,6 +174,9 @@ impl CodeIntelServer {
             }
             protocol::methods::HEALTH_CHECK => {
                 json!({ "status": "ok", "timestamp": chrono::Utc::now().timestamp() })
+            }
+            protocol::methods::CHANGE_PROJECT => {
+                Self::handle_change_project(indexer, project_path, &request.params).await?
             }
             _ => {
                 warn!("Unknown method: {}", request.method);
@@ -222,6 +227,66 @@ impl CodeIntelServer {
         let indexer_guard = indexer.lock().await;
         let stats = indexer_guard.get_stats();
         let response: StatsResponse = stats.into();
+        Ok(serde_json::to_value(response)?)
+    }
+
+    async fn handle_change_project(
+        indexer: &Arc<Mutex<CodeIndexer>>, 
+        project_path: &Arc<Mutex<String>>, 
+        params: &Value
+    ) -> Result<Value> {
+        let params: ChangeProjectParams = serde_json::from_value(params.clone())
+            .context("Invalid change_project parameters")?;
+
+        // プロジェクトパスの妥当性チェック
+        let new_path = std::path::Path::new(&params.project_path);
+        if !new_path.exists() {
+            let response = ChangeProjectResponse {
+                success: false,
+                message: format!("Directory does not exist: {}", params.project_path),
+                stats: None,
+            };
+            return Ok(serde_json::to_value(response)?);
+        }
+
+        if !new_path.is_dir() {
+            let response = ChangeProjectResponse {
+                success: false,
+                message: format!("Path is not a directory: {}", params.project_path),
+                stats: None,
+            };
+            return Ok(serde_json::to_value(response)?);
+        }
+
+        // プロジェクトパスを更新
+        {
+            let mut current_path = project_path.lock().await;
+            *current_path = params.project_path.clone();
+        }
+
+        // インデクサーをリセットして新しいディレクトリをインデックス
+        let stats = {
+            let mut indexer_guard = indexer.lock().await;
+            
+            // 既存のウォッチャーを停止
+            indexer_guard.stop_watching();
+            
+            // インデックスをクリア
+            *indexer_guard = CodeIndexer::new();
+            
+            // 新しいディレクトリをインデックス
+            indexer_guard.index_directory(&params.project_path)
+                .context("Failed to index new project")?;
+            
+            indexer_guard.get_stats()
+        };
+
+        let response = ChangeProjectResponse {
+            success: true,
+            message: format!("Successfully changed project to: {}", params.project_path),
+            stats: Some(stats.into()),
+        };
+        
         Ok(serde_json::to_value(response)?)
     }
 

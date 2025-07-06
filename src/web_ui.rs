@@ -31,6 +31,7 @@ struct StatsData {
 #[derive(Clone)]
 pub struct WebUIState {
     pub log_sender: LogSender,
+    pub tcp_port: u16,
 }
 
 pub struct WebUIServer {
@@ -45,10 +46,11 @@ lazy_static::lazy_static! {
 }
 
 impl WebUIServer {
-    pub fn new() -> (Self, LogSender) {
+    pub fn new(tcp_port: u16) -> (Self, LogSender) {
         let (log_sender, _) = broadcast::channel(1000);
         let state = WebUIState {
             log_sender: log_sender.clone(),
+            tcp_port,
         };
         
         (Self { state }, log_sender)
@@ -163,12 +165,43 @@ async fn dashboard() -> impl IntoResponse {
         .btn:hover {
             background: #0550ae;
         }
+        .change-project {
+            background: #2c3e50;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        .change-project h3 {
+            margin-top: 0;
+            color: #fff;
+        }
+        .change-project input {
+            width: 60%;
+            padding: 8px 12px;
+            background: #1e1e1e;
+            border: 1px solid #444;
+            color: #d4d4d4;
+            border-radius: 5px;
+            margin-right: 10px;
+        }
+        .current-path {
+            color: #888;
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
     </style>
 </head>
 <body>
     <div class="header">
         <h1>🦀 Code Intel Server Dashboard</h1>
         <span id="status" class="status disconnected">Disconnected</span>
+    </div>
+    
+    <div class="change-project">
+        <h3>📂 Change Project Directory</h3>
+        <div class="current-path" id="current-path">Current: Loading...</div>
+        <input type="text" id="project-path" placeholder="Enter new project path (e.g., /path/to/project)">
+        <button class="btn" onclick="changeProject()">Change Directory</button>
     </div>
     
     <div class="stats">
@@ -226,6 +259,15 @@ async fn dashboard() -> impl IntoResponse {
                     } else if (data.type === 'stats') {
                         console.log('Updating stats with:', data);
                         updateStats(data);
+                    } else if (data.type === 'change_project_response') {
+                        if (data.success) {
+                            addLogEntry(`✅ ${data.message}`);
+                            if (data.stats) {
+                                updateStats(data.stats);
+                            }
+                        } else {
+                            addLogEntry(`❌ Error: ${data.message}`);
+                        }
                     } else {
                         console.log('Unknown message type:', data.type);
                         addLogEntry(`Unknown message: ${JSON.stringify(data)}`);
@@ -274,39 +316,6 @@ async fn dashboard() -> impl IntoResponse {
             }
         }
         
-        function updateStats(stats) {
-            console.log('updateStats called with:', stats);
-            
-            const fileCountEl = document.getElementById('file-count');
-            const functionCountEl = document.getElementById('function-count');
-            const uniqueCountEl = document.getElementById('unique-count');
-            const watchStatusEl = document.getElementById('watch-status');
-            
-            console.log('Elements found:', {
-                fileCountEl,
-                functionCountEl, 
-                uniqueCountEl,
-                watchStatusEl
-            });
-            
-            if (stats.indexed_files_count !== undefined && fileCountEl) {
-                console.log('Updating file-count to:', stats.indexed_files_count);
-                fileCountEl.textContent = stats.indexed_files_count;
-            }
-            if (stats.total_symbols !== undefined && functionCountEl) {
-                console.log('Updating function-count to:', stats.total_symbols);
-                functionCountEl.textContent = stats.total_symbols;
-            }
-            if (stats.unique_symbol_names !== undefined && uniqueCountEl) {
-                console.log('Updating unique-count to:', stats.unique_symbol_names);
-                uniqueCountEl.textContent = stats.unique_symbol_names;
-            }
-            if (stats.is_watching !== undefined && watchStatusEl) {
-                console.log('Updating watch-status to:', stats.is_watching);
-                watchStatusEl.textContent = stats.is_watching ? '🟢 Active' : '🔴 Inactive';
-                watchStatusEl.style.color = stats.is_watching ? '#10b981' : '#ef4444';
-            }
-        }
         
         function clearLogs() {
             document.getElementById('logs').innerHTML = '';
@@ -325,6 +334,44 @@ async fn dashboard() -> impl IntoResponse {
             const seconds = diff % 60;
             document.getElementById('uptime').textContent = 
                 `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }
+        
+        let currentProjectPath = '';
+        
+        function updateStats(data) {
+            document.getElementById('file-count').textContent = data.indexed_files_count || '0';
+            document.getElementById('function-count').textContent = data.total_symbols || '0';
+            document.getElementById('unique-count').textContent = data.unique_symbol_names || '0';
+            document.getElementById('watch-status').textContent = data.is_watching ? '✅ Active' : '❌ Inactive';
+            
+            // プロジェクトパスが含まれている場合は更新
+            if (data.project_path) {
+                currentProjectPath = data.project_path;
+                document.getElementById('current-path').textContent = `Current: ${currentProjectPath}`;
+                document.getElementById('project-path').value = currentProjectPath;
+            }
+        }
+        
+        async function changeProject() {
+            const newPath = document.getElementById('project-path').value.trim();
+            if (!newPath) {
+                alert('Please enter a valid directory path');
+                return;
+            }
+            
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                addLogEntry('❌ WebSocket is not connected');
+                return;
+            }
+            
+            // WebSocket経由でchange_projectリクエストを送信
+            const request = {
+                type: 'change_project',
+                project_path: newPath
+            };
+            
+            ws.send(JSON.stringify(request));
+            addLogEntry(`📤 Requesting project change to: ${newPath}`);
         }
         
         // Connect and start timers
@@ -396,12 +443,26 @@ async fn websocket_connection(socket: WebSocket, state: WebUIState) {
         }
     });
 
-    // クライアントからのメッセージを受信（ping/pong等）
+    // クライアントからのメッセージを受信
+    let tcp_port = state.tcp_port;
+    let log_sender_clone = state.log_sender.clone();
     let recv_task = tokio::spawn(async move {
         while let Some(msg) = ws_receiver.next().await {
             match msg {
-                Ok(Message::Text(_)) => {
-                    // クライアントからのメッセージは現在は無視
+                Ok(Message::Text(text)) => {
+                    // クライアントからのメッセージを処理
+                    if let Ok(data) = serde_json::from_str::<serde_json::Value>(&text) {
+                        if data["type"] == "change_project" {
+                            if let Some(project_path) = data["project_path"].as_str() {
+                                // TCPクライアントを使用してサーバーにリクエストを送信
+                                tokio::spawn(handle_change_project_request(
+                                    tcp_port,
+                                    project_path.to_string(),
+                                    log_sender_clone.clone(),
+                                ));
+                            }
+                        }
+                    }
                 }
                 Ok(Message::Close(_)) => {
                     debug!("WebSocket connection closed by client");
@@ -471,4 +532,50 @@ impl LogBroadcaster {
 }
 
 use axum::extract::ws::CloseFrame;
+use crate::client::CodeIntelClient;
+use crate::protocol::{ServerRequest, ChangeProjectParams};
 use futures_util::{SinkExt, StreamExt};
+
+async fn handle_change_project_request(tcp_port: u16, project_path: String, log_sender: LogSender) {
+    let client = CodeIntelClient::new(tcp_port);
+    
+    // change_projectリクエストを送信
+    let request = ServerRequest {
+        id: 1,
+        method: "change_project".to_string(),
+        params: serde_json::to_value(ChangeProjectParams { project_path: project_path.clone() }).unwrap(),
+    };
+    
+    match client.send_request(request).await {
+        Ok(response) => {
+            if let Some(result) = response.result {
+                // 結果をWebSocketクライアントに送信
+                let message = json!({
+                    "type": "change_project_response",
+                    "success": result["success"].as_bool().unwrap_or(false),
+                    "message": result["message"].as_str().unwrap_or("Unknown response"),
+                    "stats": result["stats"]
+                });
+                
+                let _ = log_sender.send(message.to_string());
+            } else if let Some(error) = response.error {
+                let message = json!({
+                    "type": "change_project_response",
+                    "success": false,
+                    "message": error
+                });
+                
+                let _ = log_sender.send(message.to_string());
+            }
+        }
+        Err(e) => {
+            let message = json!({
+                "type": "change_project_response",
+                "success": false,
+                "message": format!("Failed to connect to server: {}", e)
+            });
+            
+            let _ = log_sender.send(message.to_string());
+        }
+    }
+}

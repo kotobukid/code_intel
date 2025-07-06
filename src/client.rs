@@ -18,7 +18,7 @@ impl CodeIntelClient {
     }
 
     /// サーバーに接続してリクエストを送信
-    async fn send_request(&self, method: &str, params: Value) -> Result<ServerResponse> {
+    async fn send_request_internal(&self, method: &str, params: Value) -> Result<ServerResponse> {
         let mut stream = TcpStream::connect(format!("127.0.0.1:{}", self.port)).await
             .context("Failed to connect to code_intel server")?;
 
@@ -55,6 +55,11 @@ impl CodeIntelClient {
 
         Ok(response)
     }
+    
+    /// サーバーに任意のリクエストを送信（公開API）
+    pub async fn send_request(&self, request: ServerRequest) -> Result<ServerResponse> {
+        self.send_request_internal(&request.method, request.params).await
+    }
 
     /// シンボル定義を検索（互換性のための旧API）
     pub async fn find_definition(&self, function_name: &str) -> Result<Value> {
@@ -68,19 +73,19 @@ impl CodeIntelClient {
             symbol_type,
         })?;
 
-        let response = self.send_request(protocol::methods::FIND_DEFINITION, params).await?;
+        let response = self.send_request_internal(protocol::methods::FIND_DEFINITION, params).await?;
         response.result.ok_or_else(|| anyhow::anyhow!("No result in response"))
     }
 
     /// サーバー統計を取得
     pub async fn get_stats(&self) -> Result<Value> {
-        let response = self.send_request(protocol::methods::GET_STATS, json!({})).await?;
+        let response = self.send_request_internal(protocol::methods::GET_STATS, json!({})).await?;
         response.result.ok_or_else(|| anyhow::anyhow!("No result in response"))
     }
 
     /// ヘルスチェック
     pub async fn health_check(&self) -> Result<Value> {
-        let response = self.send_request(protocol::methods::HEALTH_CHECK, json!({})).await?;
+        let response = self.send_request_internal(protocol::methods::HEALTH_CHECK, json!({})).await?;
         response.result.ok_or_else(|| anyhow::anyhow!("No result in response"))
     }
 
