@@ -42,6 +42,10 @@ enum Commands {
         /// Web UI port
         #[arg(long, default_value_t = 8080)]
         web_port: u16,
+        
+        /// Open browser automatically when web UI is enabled
+        #[arg(long)]
+        open: bool,
     },
     /// Run as MCP client (for Claude Code integration)
     McpClient {
@@ -71,25 +75,51 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     let result = match cli.command {
-        Commands::Serve { project_path, port, web_ui, web_port } => {
+        Commands::Serve { project_path, port, web_ui, web_port, open } => {
             info!("Starting code_intel server for project: {}", project_path.display());
             
             if web_ui {
                 // Web UIを有効にして起動
                 let (web_server, log_sender) = WebUIServer::new();
-                let server = CodeIntelServer::new(project_path).with_web_ui(log_sender);
+                let server = CodeIntelServer::new(project_path.clone()).with_web_ui(log_sender);
                 
                 // Web UIサーバーを別タスクで起動
+                let web_port_clone = web_port;
                 let web_task = tokio::spawn(async move {
-                    if let Err(e) = web_server.start(web_port).await {
+                    if let Err(e) = web_server.start(web_port_clone).await {
                         error!("Web UI server error: {}", e);
                     }
                 });
                 
                 // メインサーバーを起動
+                let port_clone = port;
                 let server_task = tokio::spawn(async move {
-                    server.start(port).await
+                    server.start(port_clone).await
                 });
+                
+                // サービスが起動するまで少し待機
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                
+                // ヘルスチェック表示
+                println!("\n🚀 Code Intel Service Started\n");
+                println!("  ✅ TCP Server:    http://localhost:{}", port);
+                println!("  ✅ Web UI:        http://localhost:{}", web_port);
+                println!("  ✅ Project Path:  {}", project_path.display());
+                println!("  ✅ MCP Ready:     Yes\n");
+                
+                // Web UIのURLを構築
+                let web_url = format!("http://localhost:{}", web_port);
+                
+                // ブラウザを開く（--openオプションが指定された場合）
+                if open {
+                    println!("Opening browser...");
+                    if let Err(e) = open::that(&web_url) {
+                        error!("Failed to open browser: {}", e);
+                        eprintln!("Please open {} manually", web_url);
+                    }
+                }
+                
+                println!("Press Ctrl+C to stop the server\n");
                 
                 // どちらかが終了するまで待機
                 tokio::select! {
@@ -108,8 +138,30 @@ async fn main() -> Result<(), anyhow::Error> {
                 }
             } else {
                 // 通常モード
-                let server = CodeIntelServer::new(project_path);
-                server.start(port).await
+                let server = CodeIntelServer::new(project_path.clone());
+                
+                // サーバーを別タスクで起動
+                let port_clone = port;
+                let server_task = tokio::spawn(async move {
+                    server.start(port_clone).await
+                });
+                
+                // サービスが起動するまで少し待機
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                
+                // ヘルスチェック表示（通常モード）
+                println!("\n🚀 Code Intel Service Started (CLI Mode)\n");
+                println!("  ✅ TCP Server:    http://localhost:{}", port);
+                println!("  ✅ Project Path:  {}", project_path.display());
+                println!("  ✅ MCP Ready:     Yes");
+                println!("  ℹ️  Web UI:        Disabled (use --web-ui to enable)\n");
+                println!("Press Ctrl+C to stop the server\n");
+                
+                // サーバータスクの終了を待機
+                match server_task.await {
+                    Ok(r) => r,
+                    Err(e) => Err(anyhow::anyhow!("Server task error: {}", e))
+                }
             }
         }
         Commands::McpClient { port } => {
