@@ -8,7 +8,10 @@ use tokio::sync::Mutex;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{info, error, debug, warn};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::collections::HashSet;
+use std::time::{Duration, Instant};
+use notify::Event;
 
 pub struct CodeIntelServer {
     indexer: Arc<Mutex<CodeIndexer>>,
@@ -117,14 +120,14 @@ impl CodeIntelServer {
 
             let log_message = format!("Received request: {}", trimmed_line);
             debug!("{}", log_message);
-            if let Some(ref broadcaster) = log_broadcaster {
+            if let Some(broadcaster) = log_broadcaster.as_ref() {
                 broadcaster.log(log_message);
             }
 
             let response = match Self::handle_request(&indexer, &project_path, trimmed_line).await {
                 Ok(response) => {
                     // 成功時に統計情報をブロードキャスト
-                    if let Some(ref broadcaster) = log_broadcaster {
+                    if let Some(broadcaster) = log_broadcaster.as_ref() {
                         let indexer_guard = indexer.lock().await;
                         let stats = indexer_guard.get_stats();
                         broadcaster.send_stats(
@@ -307,7 +310,7 @@ impl CodeIntelServer {
         }
     }
 
-    /// ファイル監視機能を開始
+    /// ファイル監視機能を開始（スロットル機能付き）
     async fn start_file_watcher(
         indexer: Arc<Mutex<CodeIndexer>>,
         project_path: String,
@@ -317,58 +320,86 @@ impl CodeIntelServer {
             let mut indexer_guard = indexer.lock().await;
             let receiver = indexer_guard.start_watching(&project_path)?;
             
-            let log_message = format!("File watcher started for: {}", project_path);
+            let log_message = format!("File watcher started for: {} (Rust files only)", project_path);
             info!("{}", log_message);
-            if let Some(ref broadcaster) = log_broadcaster {
+            if let Some(broadcaster) = log_broadcaster.as_ref() {
                 broadcaster.log(log_message);
             }
             
             receiver
         };
 
+        // スロットル用の共有状態
+        let pending_files = Arc::new(Mutex::new(HashSet::<PathBuf>::new()));
+        let processing_flag = Arc::new(Mutex::new(false));
+        
+        // 定期的な処理タスクを起動
+        let indexer_clone = Arc::clone(&indexer);
+        let pending_files_clone = Arc::clone(&pending_files);
+        let processing_flag_clone = Arc::clone(&processing_flag);
+        let log_broadcaster_clone = log_broadcaster.clone();
+        
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(2));
+            loop {
+                interval.tick().await;
+                
+                let files_to_process = {
+                    let mut pending = pending_files_clone.lock().await;
+                    if pending.is_empty() {
+                        continue;
+                    }
+                    let files = pending.clone();
+                    pending.clear();
+                    files
+                };
+                
+                let mut processing = processing_flag_clone.lock().await;
+                if *processing {
+                    continue; // 既に処理中の場合はスキップ
+                }
+                *processing = true;
+                drop(processing);
+                
+                Self::process_file_changes(
+                    &indexer_clone,
+                    &files_to_process,
+                    &log_broadcaster_clone,
+                ).await;
+                
+                let mut processing = processing_flag_clone.lock().await;
+                *processing = false;
+            }
+        });
+
         // ファイル監視イベントを処理
         while let Some(event_result) = watch_receiver.recv().await {
             match event_result {
                 Ok(event) => {
-                    let mut indexer_guard = indexer.lock().await;
-                    match indexer_guard.handle_watch_event(event) {
-                        Ok(updated_functions) => {
-                            if !updated_functions.is_empty() {
-                                let log_message = format!(
-                                    "File changes detected, updated {} function(s): {}",
-                                    updated_functions.len(),
-                                    updated_functions.join(", ")
-                                );
-                                info!("{}", log_message);
-                                if let Some(ref broadcaster) = log_broadcaster {
-                                    broadcaster.log(log_message);
-                                }
+                    // Rustファイルのみをフィルタリング
+                    let rust_files: Vec<PathBuf> = event.paths.into_iter()
+                        .filter(|path| Self::is_rust_file(path))
+                        .collect();
+                    
+                    if rust_files.is_empty() {
+                        // debug!("Non-Rust file change ignored");
+                        continue;
+                    }
 
-                                // 統計情報を更新
-                                let stats = indexer_guard.get_stats();
-                                if let Some(ref broadcaster) = log_broadcaster {
-                                    broadcaster.send_stats(
-                                        stats.indexed_files_count,
-                                        stats.total_symbols,
-                                        stats.unique_symbol_names,
-                                        stats.is_watching,
-                                    );
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            let log_message = format!("Error processing file watch event: {}", e);
-                            error!("{}", log_message);
-                            if let Some(ref broadcaster) = log_broadcaster {
-                                broadcaster.log(log_message);
-                            }
+                    debug!("Rust file change detected: {:?}", rust_files);
+                    
+                    // 変更されたRustファイルを保留リストに追加
+                    {
+                        let mut pending = pending_files.lock().await;
+                        for path in rust_files {
+                            pending.insert(path);
                         }
                     }
                 }
                 Err(e) => {
                     let log_message = format!("File watch error: {}", e);
                     error!("{}", log_message);
-                    if let Some(ref broadcaster) = log_broadcaster {
+                    if let Some(broadcaster) = log_broadcaster.as_ref() {
                         broadcaster.log(log_message);
                     }
                 }
@@ -376,6 +407,80 @@ impl CodeIntelServer {
         }
 
         Ok(())
+    }
+
+    /// Rustファイルかどうかを判定
+    fn is_rust_file(path: &Path) -> bool {
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext == "rs")
+            .unwrap_or(false)
+    }
+
+    /// ファイル変更のバッチ処理
+    async fn process_file_changes(
+        indexer: &Arc<Mutex<CodeIndexer>>,
+        changed_files: &HashSet<PathBuf>,
+        log_broadcaster: &Option<LogBroadcaster>,
+    ) {
+        let mut all_updated_symbols = Vec::new();
+        
+        {
+            let mut indexer_guard = indexer.lock().await;
+            
+            for path in changed_files {
+                // 個別のイベントを作成してhandler関数を呼び出し
+                let event = Event {
+                    kind: notify::EventKind::Modify(notify::event::ModifyKind::Data(notify::event::DataChange::Content)),
+                    paths: vec![path.clone()],
+                    attrs: Default::default(),
+                };
+                
+                match indexer_guard.handle_watch_event(event) {
+                    Ok(updated_symbols) => {
+                        all_updated_symbols.extend(updated_symbols);
+                    }
+                    Err(e) => {
+                        let log_message = format!("Error processing file {}: {}", path.display(), e);
+                        error!("{}", log_message);
+                        if let Some(broadcaster) = log_broadcaster.as_ref() {
+                            broadcaster.log(log_message);
+                        }
+                    }
+                }
+            }
+        }
+
+        if !all_updated_symbols.is_empty() {
+            let log_message = format!(
+                "Batch file update completed: {} files processed, {} symbols updated: {}",
+                changed_files.len(),
+                all_updated_symbols.len(),
+                all_updated_symbols.join(", ")
+            );
+            info!("{}", log_message);
+            if let Some(broadcaster) = log_broadcaster.as_ref() {
+                broadcaster.log(log_message);
+            }
+
+            // 統計情報を更新
+            let indexer_guard = indexer.lock().await;
+            let stats = indexer_guard.get_stats();
+            if let Some(broadcaster) = log_broadcaster.as_ref() {
+                broadcaster.send_stats(
+                    stats.indexed_files_count,
+                    stats.total_symbols,
+                    stats.unique_symbol_names,
+                    stats.is_watching,
+                );
+            }
+        } else if !changed_files.is_empty() {
+            let log_message = format!(
+                "Batch file check completed: {} files processed, no symbol changes detected",
+                changed_files.len()
+            );
+            debug!("{}", log_message);
+        }
     }
 }
 

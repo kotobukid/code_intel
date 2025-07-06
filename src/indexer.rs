@@ -1,6 +1,6 @@
 use crate::parser::{RustParser, SymbolInfo};
 use crate::protocol::SymbolType;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use tracing::{info, warn, debug, error};
@@ -8,6 +8,7 @@ use notify::{RecommendedWatcher, Watcher, RecursiveMode, Event, EventKind};
 use tokio::sync::mpsc;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use std::time::{Duration, Instant};
 
 pub struct CodeIndexer {
     parser: RustParser,
