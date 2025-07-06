@@ -16,6 +16,25 @@ pub struct SymbolInfo {
     pub generics: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct UsageInfo {
+    pub symbol_name: String,
+    pub file_path: String,
+    pub line: usize,
+    pub column: usize,
+    pub usage_type: UsageType,
+    pub context: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum UsageType {
+    FunctionCall,
+    TypeUsage,
+    TraitUsage,
+    Import,
+    Reference,
+}
+
 pub struct RustParser {
     symbols: HashMap<String, Vec<SymbolInfo>>,
 }
@@ -254,6 +273,159 @@ impl RustParser {
         for symbol_name in symbol_names_to_remove {
             self.symbols.remove(&symbol_name);
         }
+    }
+
+    /// 指定シンボルの使用箇所を検索
+    pub fn find_usages(&self, symbol_name: &str, symbol_type: Option<SymbolType>) -> Vec<UsageInfo> {
+        let mut usages = Vec::new();
+        
+        // 全ファイルから使用箇所を検索
+        for (_, symbol_infos) in &self.symbols {
+            for symbol_info in symbol_infos {
+                // ファイル内容を読み込んで使用箇所を検索
+                if let Ok(content) = std::fs::read_to_string(&symbol_info.file_path) {
+                    let file_usages = self.find_usages_in_content(symbol_name, symbol_type.as_ref(), &content, &symbol_info.file_path);
+                    usages.extend(file_usages);
+                }
+            }
+        }
+        
+        // 重複を削除
+        usages.sort_by(|a, b| {
+            a.file_path.cmp(&b.file_path)
+                .then(a.line.cmp(&b.line))
+                .then(a.column.cmp(&b.column))
+        });
+        usages.dedup_by(|a, b| {
+            a.file_path == b.file_path && a.line == b.line && a.column == b.column
+        });
+        
+        usages
+    }
+    
+    /// ファイル内容から使用箇所を検索
+    fn find_usages_in_content(&self, symbol_name: &str, symbol_type: Option<&SymbolType>, content: &str, file_path: &str) -> Vec<UsageInfo> {
+        let mut usages = Vec::new();
+        let lines: Vec<&str> = content.lines().collect();
+        
+        for (line_idx, line) in lines.iter().enumerate() {
+            let mut char_offset = 0;
+            
+            // 行内でシンボル名の出現を検索
+            while let Some(pos) = line[char_offset..].find(symbol_name) {
+                let absolute_pos = char_offset + pos;
+                
+                // 前後の文字をチェックして、単語境界であることを確認
+                let is_word_boundary = {
+                    let before_char = if absolute_pos > 0 {
+                        line.chars().nth(absolute_pos - 1)
+                    } else {
+                        None
+                    };
+                    let after_char = line.chars().nth(absolute_pos + symbol_name.len());
+                    
+                    let before_ok = before_char.map_or(true, |c| !c.is_alphanumeric() && c != '_');
+                    let after_ok = after_char.map_or(true, |c| !c.is_alphanumeric() && c != '_');
+                    
+                    before_ok && after_ok
+                };
+                
+                if is_word_boundary {
+                    // 使用箇所の種類を判定
+                    let usage_type = self.determine_usage_type(line, absolute_pos, symbol_name, symbol_type);
+                    
+                    // 定義行でない場合のみ使用箇所として記録
+                    if !self.is_definition_line(line, symbol_name, symbol_type) {
+                        usages.push(UsageInfo {
+                            symbol_name: symbol_name.to_string(),
+                            file_path: file_path.to_string(),
+                            line: line_idx + 1, // 1ベースの行番号
+                            column: absolute_pos,
+                            usage_type,
+                            context: line.trim().to_string(),
+                        });
+                    }
+                }
+                
+                char_offset = absolute_pos + 1;
+            }
+        }
+        
+        usages
+    }
+    
+    /// 使用箇所の種類を判定
+    fn determine_usage_type(&self, line: &str, pos: usize, symbol_name: &str, symbol_type: Option<&SymbolType>) -> UsageType {
+        let trimmed = line.trim();
+        
+        // 関数呼び出しパターン
+        if let Some(after_symbol) = line.get(pos + symbol_name.len()..) {
+            if after_symbol.trim_start().starts_with('(') {
+                return UsageType::FunctionCall;
+            }
+        }
+        
+        // 型注釈やstruct初期化
+        if symbol_type == Some(&SymbolType::Struct) || symbol_type == Some(&SymbolType::Enum) {
+            if trimmed.contains("::") || trimmed.contains('{') {
+                return UsageType::TypeUsage;
+            }
+        }
+        
+        // トレイト使用
+        if symbol_type == Some(&SymbolType::Trait) {
+            if trimmed.contains("impl") || trimmed.contains("for") {
+                return UsageType::TraitUsage;
+            }
+        }
+        
+        // インポート
+        if trimmed.starts_with("use ") {
+            return UsageType::Import;
+        }
+        
+        UsageType::Reference
+    }
+    
+    /// 定義行かどうかを判定
+    fn is_definition_line(&self, line: &str, symbol_name: &str, symbol_type: Option<&SymbolType>) -> bool {
+        let trimmed = line.trim();
+        
+        // 各シンボル種別の定義パターンをチェック
+        let patterns = match symbol_type {
+            Some(SymbolType::Function) => vec![
+                format!("fn {}", symbol_name),
+                format!("async fn {}", symbol_name),
+            ],
+            Some(SymbolType::Struct) => vec![
+                format!("struct {}", symbol_name),
+            ],
+            Some(SymbolType::Enum) => vec![
+                format!("enum {}", symbol_name),
+            ],
+            Some(SymbolType::Trait) => vec![
+                format!("trait {}", symbol_name),
+            ],
+            None => vec![
+                format!("fn {}", symbol_name),
+                format!("async fn {}", symbol_name),
+                format!("struct {}", symbol_name),
+                format!("enum {}", symbol_name),
+                format!("trait {}", symbol_name),
+            ],
+        };
+        
+        // 可視性修飾子も考慮
+        for pattern in patterns {
+            if trimmed.contains(&pattern) ||
+               trimmed.contains(&format!("pub {}", pattern)) ||
+               trimmed.contains(&format!("pub(crate) {}", pattern)) ||
+               trimmed.contains(&format!("pub(super) {}", pattern)) {
+                return true;
+            }
+        }
+        
+        false
     }
 
     /// ジェネリクスパラメータをフォーマット

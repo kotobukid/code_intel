@@ -1,4 +1,4 @@
-use crate::protocol::{self, ServerRequest, ServerResponse, FindDefinitionParams, SymbolType};
+use crate::protocol::{self, ServerRequest, ServerResponse, FindDefinitionParams, FindUsagesParams, SymbolType};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -85,6 +85,17 @@ impl CodeIntelClient {
     /// ヘルスチェック
     pub async fn health_check(&self) -> Result<Value> {
         let response = self.send_request_internal(protocol::methods::HEALTH_CHECK, json!({})).await?;
+        response.result.ok_or_else(|| anyhow::anyhow!("No result in response"))
+    }
+
+    /// シンボル使用箇所を検索
+    pub async fn find_usages(&self, symbol_name: &str, symbol_type: Option<SymbolType>) -> Result<Value> {
+        let params = serde_json::to_value(FindUsagesParams {
+            symbol_name: symbol_name.to_string(),
+            symbol_type,
+        })?;
+
+        let response = self.send_request_internal(protocol::methods::FIND_USAGES, params).await?;
         response.result.ok_or_else(|| anyhow::anyhow!("No result in response"))
     }
 

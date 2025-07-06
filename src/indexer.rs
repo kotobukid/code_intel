@@ -77,6 +77,11 @@ impl CodeIndexer {
         self.parser.find_symbol(symbol_name, symbol_type)
     }
 
+    /// シンボル使用箇所を検索
+    pub fn find_usages(&self, symbol_name: &str, symbol_type: Option<SymbolType>) -> Vec<crate::parser::UsageInfo> {
+        self.parser.find_usages(symbol_name, symbol_type)
+    }
+
     /// すべてのシンボル情報を取得
     pub fn get_all_symbols(&self) -> &HashMap<String, Vec<SymbolInfo>> {
         self.parser.get_all_symbols()

@@ -1,5 +1,5 @@
 use crate::indexer::CodeIndexer;
-use crate::protocol::{self, ServerRequest, ServerResponse, FindDefinitionParams, FindDefinitionResponse, StatsResponse, SymbolDefinition, ChangeProjectParams, ChangeProjectResponse};
+use crate::protocol::{self, ServerRequest, ServerResponse, FindDefinitionParams, FindDefinitionResponse, FindUsagesParams, FindUsagesResponse, StatsResponse, SymbolDefinition, SymbolUsage, ChangeProjectParams, ChangeProjectResponse};
 use crate::web_ui::{LogSender, LogBroadcaster};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -172,6 +172,9 @@ impl CodeIntelServer {
             protocol::methods::FIND_DEFINITION => {
                 Self::handle_find_definition(indexer, &request.params).await?
             }
+            protocol::methods::FIND_USAGES => {
+                Self::handle_find_usages(indexer, &request.params).await?
+            }
             protocol::methods::GET_STATS => {
                 Self::handle_get_stats(indexer).await?
             }
@@ -223,6 +226,22 @@ impl CodeIntelServer {
             }
         };
 
+        Ok(serde_json::to_value(response)?)
+    }
+
+    async fn handle_find_usages(indexer: &Arc<Mutex<CodeIndexer>>, params: &Value) -> Result<Value> {
+        let params: FindUsagesParams = serde_json::from_value(params.clone())
+            .context("Invalid find_usages parameters")?;
+
+        let indexer_guard = indexer.lock().await;
+        let usages = indexer_guard.find_usages(&params.symbol_name, params.symbol_type);
+
+        let response_usages: Vec<SymbolUsage> = usages
+            .into_iter()
+            .map(|usage| usage.into())
+            .collect();
+
+        let response = FindUsagesResponse { usages: response_usages };
         Ok(serde_json::to_value(response)?)
     }
 

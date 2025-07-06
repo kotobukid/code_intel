@@ -28,8 +28,8 @@ AIアシスタント（Claude Code等）がコードベースを効率的に理�
 
 ### 提供する機能
 
-- `find_definition("function_name")` → 定義場所を即座に返却
-- `find_usages("function_name")` → 使用箇所のリストを返却
+- `find_definition("symbol_name")` → 定義場所を即座に返却 ✅ 実装済み
+- `find_usages("symbol_name")` → 使用箇所のリストを返却 ✅ **NEW!** 実装済み
 - `get_call_graph("function_name")` → 呼び出し関係のグラフを返却
 - `list_symbols_in_file("path/to/file.rs")` → ファイル内の全シンボル
 - `find_implementations("trait_name")` → トレイトの実装一覧
@@ -55,8 +55,8 @@ AIアシスタント（Claude Code等）がコードベースを効率的に理�
 ### MCP機能設計
 
 - **Tools（実行可能操作）**:
-    - `find_definition`: 関数/型定義の検索
-    - `find_usages`: 使用箇所の検索
+    - `find_definition`: 関数/型定義の検索 ✅ 実装済み
+    - `find_usages`: 使用箇所の検索 ✅ **NEW!** 実装済み
     - `get_call_graph`: 呼び出し関係グラフ生成
 - **Resources（読み取り専用データ）**:
     - `/symbols/{file_path}`: ファイル内シンボル一覧
@@ -99,6 +99,7 @@ AIアシスタント（Claude Code等）がコードベースを効率的に理�
     - stdio transport実装済み
     - Claude Code/Claude Desktop対応
     - `find_definition` ツール実装済み
+    - `find_usages` ツール実装済み（NEW!）
 
 3. **リアルタイムWeb UIダッシュボード**
     - VS Code風ダークテーマ
@@ -232,7 +233,7 @@ cargo run -- serve --port 7778 --web-port 8081
 
 ### Phase 3: 機能拡張
 
-- [ ] 関数使用箇所検索（find_usages）
+- [x] 関数使用箇所検索（find_usages）✅ **NEW!** 完了
 - [ ] コールグラフ生成・可視化
 - [ ] struct/enum/trait解析
 - [ ] 他言語対応（Python、TypeScript等）
@@ -247,8 +248,9 @@ cargo run -- serve --port 7778 --web-port 8081
 ## 期待される効果
 
 - ✅ **実証済み**: AIアシスタントのコード理解速度が劇的に向上
-- ✅ **実証済み**: 「この関数どこで使われてる？」への即答
+- ✅ **実証済み**: 「この関数どこで使われてる？」への即答（IconRed関数で5箇所を瞬時に検出）
 - ✅ **実証済み**: rust-analyzerの起動を待つ必要なし
+- ✅ **NEW!**: 使用箇所の種類別分類（関数呼び出し、インポート、型使用等）
 - 🔄 **計画中**: 大規模リファクタリング時の影響範囲把握
 
 ## アーキテクチャ詳細

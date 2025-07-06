@@ -191,6 +191,24 @@ impl McpClient {
                         },
                         "required": ["symbol_name"]
                     }
+                },
+                "find_usages": {
+                    "description": "Find all usages of a symbol in the codebase",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "symbol_name": {
+                                "type": "string",
+                                "description": "Name of the symbol to find usages for"
+                            },
+                            "symbol_type": {
+                                "type": "string",
+                                "description": "Type of symbol to search for (Function, Struct, Enum, Trait). If not specified, searches all types.",
+                                "enum": ["Function", "Struct", "Enum", "Trait"]
+                            }
+                        },
+                        "required": ["symbol_name"]
+                    }
                 }
             },
             "resources": {},
@@ -232,6 +250,25 @@ impl McpClient {
                     },
                     "required": ["symbol_name"]
                 }
+            },
+            {
+                "name": "find_usages",
+                "description": "Find all usages of a symbol in the codebase",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "symbol_name": {
+                            "type": "string",
+                            "description": "Name of the symbol to find usages for"
+                        },
+                        "symbol_type": {
+                            "type": "string",
+                            "description": "Type of symbol to search for (Function, Struct, Enum, Trait). If not specified, searches all types.",
+                            "enum": ["Function", "Struct", "Enum", "Trait"]
+                        }
+                    },
+                    "required": ["symbol_name"]
+                }
             }
         ]);
 
@@ -257,6 +294,7 @@ impl McpClient {
 
         match tool_name {
             "find_definition" => self.handle_find_definition_tool(arguments, &request.id).await,
+            "find_usages" => self.handle_find_usages_tool(arguments, &request.id).await,
             _ => Ok(JsonRpcResponse {
                 jsonrpc: "2.0".to_string(),
                 result: None,
@@ -321,6 +359,65 @@ impl McpClient {
                                   find_response.definitions.len(), 
                                   symbol_name,
                                   definitions_text)
+                }]
+            })
+        };
+
+        Ok(JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            result: Some(result),
+            error: None,
+            id: request_id.clone(),
+        })
+    }
+
+    async fn handle_find_usages_tool(&self, arguments: &Value, request_id: &Option<Value>) -> Result<JsonRpcResponse> {
+        let symbol_name = arguments.get("symbol_name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing symbol_name parameter"))?;
+        
+        // symbol_typeパラメータを取得
+        let symbol_type = arguments.get("symbol_type")
+            .and_then(|v| v.as_str())
+            .and_then(|s| serde_json::from_value::<protocol::SymbolType>(json!(s)).ok());
+
+        // サーバーが起動しているかチェック
+        if !self.client.is_server_running().await {
+            return Ok(JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                result: Some(json!({
+                    "content": [{
+                        "type": "text",
+                        "text": "Error: Code intelligence server is not running. Please start the server with 'code_intel serve' before using this tool."
+                    }]
+                })),
+                error: None,
+                id: request_id.clone(),
+            });
+        }
+
+        // サーバーに問い合わせ
+        let server_result = self.client.find_usages(symbol_name, symbol_type).await?;
+        
+        // protocol::FindUsagesResponse をパース
+        let find_response: protocol::FindUsagesResponse = serde_json::from_value(server_result)?;
+
+        let result = if find_response.usages.is_empty() {
+            json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("No usages found for symbol '{}'", symbol_name)
+                }]
+            })
+        } else {
+            let usages_text = serde_json::to_string_pretty(&find_response.usages)?;
+            json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("Found {} usage(s) for symbol '{}':\n\n{}", 
+                                  find_response.usages.len(), 
+                                  symbol_name,
+                                  usages_text)
                 }]
             })
         };

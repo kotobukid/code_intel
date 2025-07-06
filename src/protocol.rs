@@ -85,6 +85,38 @@ pub struct ChangeProjectResponse {
     pub stats: Option<StatsResponse>,
 }
 
+/// find_usages のパラメータ
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FindUsagesParams {
+    pub symbol_name: String,
+    pub symbol_type: Option<SymbolType>,  // None の場合は全種類を検索
+}
+
+/// find_usages のレスポンス
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FindUsagesResponse {
+    pub usages: Vec<SymbolUsage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolUsage {
+    pub symbol_name: String,
+    pub file_path: String,
+    pub line: usize,
+    pub column: usize,
+    pub usage_type: UsageType,
+    pub context: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum UsageType {
+    FunctionCall,
+    TypeUsage,
+    TraitUsage,
+    Import,
+    Reference,
+}
+
 impl From<crate::parser::SymbolInfo> for SymbolDefinition {
     fn from(symbol_info: crate::parser::SymbolInfo) -> Self {
         Self {
@@ -96,6 +128,25 @@ impl From<crate::parser::SymbolInfo> for SymbolDefinition {
             signature: symbol_info.signature,
             visibility: symbol_info.visibility,
             generics: symbol_info.generics,
+        }
+    }
+}
+
+impl From<crate::parser::UsageInfo> for SymbolUsage {
+    fn from(usage_info: crate::parser::UsageInfo) -> Self {
+        Self {
+            symbol_name: usage_info.symbol_name,
+            file_path: usage_info.file_path,
+            line: usage_info.line,
+            column: usage_info.column,
+            usage_type: match usage_info.usage_type {
+                crate::parser::UsageType::FunctionCall => UsageType::FunctionCall,
+                crate::parser::UsageType::TypeUsage => UsageType::TypeUsage,
+                crate::parser::UsageType::TraitUsage => UsageType::TraitUsage,
+                crate::parser::UsageType::Import => UsageType::Import,
+                crate::parser::UsageType::Reference => UsageType::Reference,
+            },
+            context: usage_info.context,
         }
     }
 }
