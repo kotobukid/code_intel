@@ -4,7 +4,6 @@ use serde_json::{json, Value};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::net::TcpStream;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tracing::{debug, error};
 
 static REQUEST_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -91,9 +90,6 @@ impl CodeIntelClient {
 
     /// サーバーが起動しているかチェック
     pub async fn is_server_running(&self) -> bool {
-        match self.health_check().await {
-            Ok(_) => true,
-            Err(_) => false,
-        }
+        (self.health_check().await).is_ok()
     }
 }

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
-use syn::{File, Item, ItemFn, ItemStruct, ItemEnum, ItemTrait, Signature, Visibility, spanned::Spanned};
+use syn::{File, Item, ItemFn, ItemStruct, ItemEnum, ItemTrait, Signature, Visibility};
 use anyhow::{Context, Result};
 use crate::protocol::SymbolType;
 
@@ -53,7 +53,7 @@ impl RustParser {
                 // シンボル名でグループ化
                 self.symbols
                     .entry(info.name.clone())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(info);
             }
         }
@@ -267,7 +267,7 @@ impl RustParser {
             .collect::<Vec<_>>()
             .join(", ");
         
-        Some(format!("<{}>", params))
+        Some(format!("<{params}>"))
     }
 }
 

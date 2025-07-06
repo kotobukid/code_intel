@@ -1,14 +1,11 @@
 use crate::parser::{RustParser, SymbolInfo};
 use crate::protocol::SymbolType;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use tracing::{info, warn, debug, error};
 use notify::{RecommendedWatcher, Watcher, RecursiveMode, Event, EventKind};
 use tokio::sync::mpsc;
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use std::time::{Duration, Instant};
 
 pub struct CodeIndexer {
     parser: RustParser,
@@ -128,7 +125,7 @@ impl CodeIndexer {
 
         let mut watcher = RecommendedWatcher::new(
             move |res: notify::Result<Event>| {
-                if let Err(_) = tx.send(res) {
+                if tx.send(res).is_err() {
                     error!("Failed to send file watch event");
                 }
             },
@@ -147,7 +144,7 @@ impl CodeIndexer {
 
     /// ファイル監視を停止
     pub fn stop_watching(&mut self) {
-        if let Some(mut watcher) = self.watcher.take() {
+        if let Some(watcher) = self.watcher.take() {
             info!("Stopping file watcher");
             // Watcherがdropされると自動的に監視停止
         }
@@ -351,7 +348,7 @@ pub fn library_function(x: i32) -> i32 {
         let stats = indexer.get_stats();
         assert_eq!(stats.total_functions, 3);
         assert_eq!(stats.indexed_files_count, 2);
-        assert_eq!(stats.is_watching, false);
+        assert!(!stats.is_watching);
 
         // main関数を検索
         let main_funcs = indexer.find_definition("main", Some(SymbolType::Function)).unwrap();

@@ -4,7 +4,6 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcRequest {
@@ -99,7 +98,7 @@ impl McpClient {
                                 result: None,
                                 error: Some(JsonRpcError {
                                     code: -32603,
-                                    message: format!("Internal error: {}", e),
+                                    message: format!("Internal error: {e}"),
                                     data: None,
                                 }),
                                 id: None,
@@ -263,7 +262,7 @@ impl McpClient {
                 result: None,
                 error: Some(JsonRpcError {
                     code: -32601,
-                    message: format!("Unknown tool: {}", tool_name),
+                    message: format!("Unknown tool: {tool_name}"),
                     data: None,
                 }),
                 id: request.id.clone(),

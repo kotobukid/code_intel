@@ -11,7 +11,7 @@ use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 pub type LogSender = broadcast::Sender<String>;
 pub type LogReceiver = broadcast::Receiver<String>;
@@ -65,7 +65,7 @@ impl WebUIServer {
             .layer(CorsLayer::permissive())
             .with_state(self.state.clone());
 
-        let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
+        let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
         info!("Web UI server listening on http://localhost:{}", port);
         
         axum::serve(listener, app).await?;
@@ -621,7 +621,6 @@ impl LogBroadcaster {
     }
 }
 
-use axum::extract::ws::CloseFrame;
 use crate::client::CodeIntelClient;
 use crate::protocol::{ServerRequest, ChangeProjectParams};
 use futures_util::{SinkExt, StreamExt};

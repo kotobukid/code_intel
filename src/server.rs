@@ -1,6 +1,6 @@
-use crate::indexer::{CodeIndexer, FileWatchReceiver};
+use crate::indexer::CodeIndexer;
 use crate::protocol::{self, ServerRequest, ServerResponse, FindDefinitionParams, FindDefinitionResponse, StatsResponse, SymbolDefinition, ChangeProjectParams, ChangeProjectResponse};
-use crate::web_ui::{WebUIServer, LogSender, LogBroadcaster};
+use crate::web_ui::{LogSender, LogBroadcaster};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -10,7 +10,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{info, error, debug, warn};
 use std::path::{Path, PathBuf};
 use std::collections::HashSet;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use notify::Event;
 
 pub struct CodeIntelServer {
@@ -35,7 +35,7 @@ impl CodeIntelServer {
 
     /// サーバーを開始してプロジェクトをインデックス
     pub async fn start(&self, port: u16) -> Result<()> {
-        let log_message = format!("Starting code_intel server on port {}", port);
+        let log_message = format!("Starting code_intel server on port {port}");
         info!("{}", log_message);
         self.broadcast_log(log_message);
         
@@ -43,7 +43,7 @@ impl CodeIntelServer {
         {
             let mut indexer = self.indexer.lock().await;
             let project_path = self.project_path.lock().await.clone();
-            let log_message = format!("Initial indexing of project: {}", project_path);
+            let log_message = format!("Initial indexing of project: {project_path}");
             info!("{}", log_message);
             self.broadcast_log(log_message);
             
@@ -51,7 +51,7 @@ impl CodeIntelServer {
                 .context("Failed to index project")?;
             
             let stats = indexer.get_stats();
-            let log_message = format!("Initial indexing completed: {}", stats);
+            let log_message = format!("Initial indexing completed: {stats}");
             info!("{}", log_message);
             self.broadcast_log(log_message);
             
@@ -60,10 +60,10 @@ impl CodeIntelServer {
         }
 
         // TCPリスナー開始
-        let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await
+        let listener = TcpListener::bind(format!("127.0.0.1:{port}")).await
             .context("Failed to bind TCP listener")?;
         
-        let log_message = format!("Server listening on 127.0.0.1:{}", port);
+        let log_message = format!("Server listening on 127.0.0.1:{port}");
         info!("{}", log_message);
         self.broadcast_log(log_message);
 
@@ -84,7 +84,7 @@ impl CodeIntelServer {
         loop {
             match listener.accept().await {
                 Ok((stream, addr)) => {
-                    let log_message = format!("New client connection from: {}", addr);
+                    let log_message = format!("New client connection from: {addr}");
                     debug!("{}", log_message);
                     self.broadcast_log(log_message);
                     
@@ -98,7 +98,7 @@ impl CodeIntelServer {
                     });
                 }
                 Err(e) => {
-                    let log_message = format!("Failed to accept connection: {}", e);
+                    let log_message = format!("Failed to accept connection: {e}");
                     error!("{}", log_message);
                     self.broadcast_log(log_message);
                 }
@@ -118,7 +118,7 @@ impl CodeIntelServer {
                 continue;
             }
 
-            let log_message = format!("Received request: {}", trimmed_line);
+            let log_message = format!("Received request: {trimmed_line}");
             debug!("{}", log_message);
             if let Some(broadcaster) = log_broadcaster.as_ref() {
                 broadcaster.log(log_message);
@@ -144,7 +144,7 @@ impl CodeIntelServer {
                     ServerResponse {
                         id: 0, // エラー時はID不明
                         result: None,
-                        error: Some(format!("Internal error: {}", e)),
+                        error: Some(format!("Internal error: {e}")),
                     }
                 }
             };
@@ -320,7 +320,7 @@ impl CodeIntelServer {
             let mut indexer_guard = indexer.lock().await;
             let receiver = indexer_guard.start_watching(&project_path)?;
             
-            let log_message = format!("File watcher started for: {} (Rust files only)", project_path);
+            let log_message = format!("File watcher started for: {project_path} (Rust files only)");
             info!("{}", log_message);
             if let Some(broadcaster) = log_broadcaster.as_ref() {
                 broadcaster.log(log_message);
@@ -397,7 +397,7 @@ impl CodeIntelServer {
                     }
                 }
                 Err(e) => {
-                    let log_message = format!("File watch error: {}", e);
+                    let log_message = format!("File watch error: {e}");
                     error!("{}", log_message);
                     if let Some(broadcaster) = log_broadcaster.as_ref() {
                         broadcaster.log(log_message);

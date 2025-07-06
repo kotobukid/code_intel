@@ -74,7 +74,9 @@ async fn main() -> Result<(), anyhow::Error> {
             .init();
     }
 
-    let result = match cli.command {
+    
+
+    match cli.command {
         Commands::Serve { project_path, port, web_ui, web_port, open } => {
             info!("Starting code_intel server for project: {}", project_path.display());
             
@@ -102,20 +104,20 @@ async fn main() -> Result<(), anyhow::Error> {
                 
                 // ヘルスチェック表示
                 println!("\n🚀 Code Intel Service Started\n");
-                println!("  ✅ TCP Server:    http://localhost:{}", port);
-                println!("  ✅ Web UI:        http://localhost:{}", web_port);
+                println!("  ✅ TCP Server:    http://localhost:{port}");
+                println!("  ✅ Web UI:        http://localhost:{web_port}");
                 println!("  ✅ Project Path:  {}", project_path.display());
                 println!("  ✅ MCP Ready:     Yes\n");
                 
                 // Web UIのURLを構築
-                let web_url = format!("http://localhost:{}", web_port);
+                let web_url = format!("http://localhost:{web_port}");
                 
                 // ブラウザを開く（--openオプションが指定された場合）
                 if open {
                     println!("Opening browser...");
                     if let Err(e) = open::that(&web_url) {
                         error!("Failed to open browser: {}", e);
-                        eprintln!("Please open {} manually", web_url);
+                        eprintln!("Please open {web_url} manually");
                     }
                 }
                 
@@ -151,7 +153,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 
                 // ヘルスチェック表示（通常モード）
                 println!("\n🚀 Code Intel Service Started (CLI Mode)\n");
-                println!("  ✅ TCP Server:    http://localhost:{}", port);
+                println!("  ✅ TCP Server:    http://localhost:{port}");
                 println!("  ✅ Project Path:  {}", project_path.display());
                 println!("  ✅ MCP Ready:     Yes");
                 println!("  ℹ️  Web UI:        Disabled (use --web-ui to enable)\n");
@@ -171,9 +173,7 @@ async fn main() -> Result<(), anyhow::Error> {
         Commands::Status { port } => {
             check_server_status(port).await
         }
-    };
-
-    result
+    }
 }
 
 async fn check_server_status(port: u16) -> Result<(), anyhow::Error> {
@@ -183,10 +183,10 @@ async fn check_server_status(port: u16) -> Result<(), anyhow::Error> {
     
     if client.is_server_running().await {
         let stats = client.get_stats().await?;
-        println!("✅ Server is running on port {}", port);
+        println!("✅ Server is running on port {port}");
         println!("📊 Stats: {}", serde_json::to_string_pretty(&stats)?);
     } else {
-        println!("❌ Server is not running on port {}", port);
+        println!("❌ Server is not running on port {port}");
         std::process::exit(1);
     }
     
