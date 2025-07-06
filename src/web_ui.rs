@@ -202,6 +202,10 @@ async fn dashboard() -> impl IntoResponse {
         <div class="current-path" id="current-path">Current: Loading...</div>
         <input type="text" id="project-path" placeholder="Enter new project path (e.g., /path/to/project)">
         <button class="btn" onclick="changeProject()">Change Directory</button>
+        <button class="btn" onclick="selectLocalDirectory()" id="select-dir-btn">📁 Browse Local Directory</button>
+        <div id="fs-api-warning" style="display: none; color: #fbbf24; margin-top: 10px; font-size: 14px;">
+            ⚠️ File System API is not supported in your browser or requires HTTPS
+        </div>
     </div>
     
     <div class="stats">
@@ -373,6 +377,92 @@ async fn dashboard() -> impl IntoResponse {
             ws.send(JSON.stringify(request));
             addLogEntry(`📤 Requesting project change to: ${newPath}`);
         }
+        
+        async function selectLocalDirectory() {
+            // File System Access APIのサポートチェック
+            if (!('showDirectoryPicker' in window)) {
+                document.getElementById('fs-api-warning').style.display = 'block';
+                addLogEntry('❌ File System Access API is not supported in this browser');
+                
+                // フォールバック: ファイル入力を使用（ディレクトリ選択）
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.webkitdirectory = true;
+                input.directory = true;
+                
+                input.onchange = (e) => {
+                    if (e.target.files.length > 0) {
+                        // ファイルパスからディレクトリパスを抽出
+                        const file = e.target.files[0];
+                        const path = file.webkitRelativePath || file.name;
+                        const dirPath = path.substring(0, path.lastIndexOf('/'));
+                        
+                        // 注意: セキュリティ上の理由で、ブラウザは完全なローカルパスを提供しません
+                        addLogEntry(`ℹ️ Selected directory: ${dirPath} (Note: Full path is not available due to browser security)`);
+                        document.getElementById('project-path').value = dirPath;
+                    }
+                };
+                
+                input.click();
+                return;
+            }
+            
+            try {
+                // File System Access APIを使用してディレクトリを選択
+                const dirHandle = await window.showDirectoryPicker({
+                    mode: 'read',
+                    startIn: 'documents'
+                });
+                
+                // ディレクトリハンドルから情報を取得
+                const dirName = dirHandle.name;
+                addLogEntry(`✅ Selected directory: ${dirName}`);
+                
+                // 注意: File System Access APIもセキュリティ上の理由で完全なパスを提供しません
+                // しかし、ローカルサーバーの場合は、ディレクトリ名から推測することは可能です
+                
+                // もしサーバーがローカルで動作している場合の推測パス
+                if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+                    // ユーザーに完全なパスを入力してもらうためのヒントを表示
+                    const suggestedPath = prompt(
+                        `Selected directory: "${dirName}"\n\n` +
+                        `Please enter the full path to this directory:\n` +
+                        `(e.g., /home/user/projects/${dirName} or C:\\Users\\name\\projects\\${dirName})`,
+                        dirName
+                    );
+                    
+                    if (suggestedPath) {
+                        document.getElementById('project-path').value = suggestedPath;
+                        addLogEntry(`📝 Path set to: ${suggestedPath}`);
+                    }
+                } else {
+                    // リモートサーバーの場合
+                    alert(`Selected: ${dirName}\n\nFor remote servers, please enter the full server-side path manually.`);
+                    document.getElementById('project-path').value = dirName;
+                }
+                
+            } catch (err) {
+                if (err.name === 'AbortError') {
+                    addLogEntry('ℹ️ Directory selection cancelled');
+                } else {
+                    addLogEntry(`❌ Error selecting directory: ${err.message}`);
+                    console.error('Directory selection error:', err);
+                }
+            }
+        }
+        
+        // ページ読み込み時にFile System Access APIのサポートをチェック
+        window.addEventListener('DOMContentLoaded', () => {
+            if (!('showDirectoryPicker' in window)) {
+                // HTTPSでない場合やAPIがサポートされていない場合の警告
+                const isSecure = window.location.protocol === 'https:' || window.location.hostname === 'localhost';
+                if (!isSecure) {
+                    document.getElementById('fs-api-warning').textContent = 
+                        '⚠️ File System API requires HTTPS (works on localhost)';
+                    document.getElementById('fs-api-warning').style.display = 'block';
+                }
+            }
+        });
         
         // Connect and start timers
         connect();
