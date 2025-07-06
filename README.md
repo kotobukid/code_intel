@@ -105,17 +105,36 @@ AIアシスタント（Claude Code等）がコードベースを効率的に理�
     - WebSocketによるリアルタイムログ表示
     - 統計情報の自動更新（インデックス済みファイル数、関数数等）
     - サーバー稼働時間表示
+    - **WebUIからプロジェクトディレクトリの動的変更**
+    - File System Access API対応のディレクトリ選択UI
 
 4. **高速コード解析エンジン**
     - synクレートによる高速パース
     - インメモリキャッシュ（HashMap）
     - 15関数、4ファイルのプロジェクトで即座にレスポンス
 
+5. **効率的なファイル監視システム**
+    - **Rustファイル専用監視**: `*.rs`ファイルのみを監視対象に限定
+    - **2秒間隔のバッチ処理**: 連続ファイル変更を効率的に処理
+    - git pull等の大量変更時のパフォーマンス最適化
+    - 不要なログ出力の抑制
+
+6. **ユーザビリティ向上機能**
+    - **--openオプション**: Web UI起動時にブラウザを自動で開く
+    - **起動時ヘルスチェック**: サービス状態の視覚的表示
+    - **URL自動表示**: Web UI URLの標準出力表示
+
 ### 🚀 使用方法
 
 ```bash
+# サーバー起動（基本）
+cargo run -- serve ./test_project
+
 # サーバー起動（Web UI付き）
 cargo run -- serve ./test_project --web-ui
+
+# サーバー起動（Web UI + ブラウザ自動起動）
+cargo run -- serve ./test_project --web-ui --open
 
 # Claude Code統合
 claude mcp add code-intel -- /path/to/target/release/code_intel mcp-client
@@ -206,9 +225,10 @@ cargo run -- serve --port 7778 --web-port 8081
 
 ### Phase 2: ファイル監視・差分更新
 
-- [ ] notifyクレートによるファイル変更検知
-- [ ] インクリメンタル更新（変更ファイルのみ再パース）
-- [ ] ホットリロード機能
+- [x] notifyクレートによるファイル変更検知（Rustファイル専用）
+- [x] インクリメンタル更新（変更ファイルのみ再パース）
+- [x] ホットリロード機能
+- [x] スロットル機能による効率的なバッチ処理
 
 ### Phase 3: 機能拡張
 

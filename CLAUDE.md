@@ -44,6 +44,9 @@ code_intel serve (デーモン)      code_intel mcp-client (瞬時起動)
 - **統計情報**: インデックス状況の可視化
 - **VS Code風UI**: ダークテーマ
 - **自動再接続**: WebSocket切断時の復旧
+- **プロジェクト変更**: WebUIから対象ディレクトリを動的変更
+- **ディレクトリ選択**: File System Access API対応のGUI選択
+- **--openオプション**: ブラウザ自動起動
 
 ### コア機能
 - **高速パース**: syn使用、ミリ秒単位レスポンス
@@ -51,12 +54,21 @@ code_intel serve (デーモン)      code_intel mcp-client (瞬時起動)
 - **並行処理**: tokioによる非同期処理
 - **エラー処理**: パース失敗時の継続処理
 
+### ファイル監視機能
+- **Rustファイル専用監視**: `*.rs`ファイルのみを対象に限定
+- **スロットル機能**: 2秒間隔のバッチ処理で連続変更を効率化
+- **差分更新**: 変更ファイルのみ再インデックス
+- **ログノイズ削減**: 関連ファイルのみログ出力
+
 ## 使用方法
 
 ### 開発時
 ```bash
 # サーバー起動（Web UI付き）
 cargo run -- serve ./test_project --web-ui
+
+# サーバー起動（Web UI + ブラウザ自動起動）
+cargo run -- serve ./test_project --web-ui --open
 
 # 別ターミナルでテスト
 echo '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"find_definition","arguments":{"function_name":"main"}},"id":1}' | cargo run -- mcp-client
@@ -86,6 +98,23 @@ claude mcp add code-intel -- $(pwd)/target/release/code_intel mcp-client
 # - 絶対パスを使用すること（相対パスは動作しない場合がある）
 # - バイナリ名は code_intel（アンダースコア付き）
 ```
+
+## ユーザビリティ向上機能
+
+### サーバー起動時の改善
+- **--openオプション**: Web UI起動時にブラウザを自動で開く
+- **起動時ヘルスチェック**: サービス状態を視覚的に表示
+- **URL自動表示**: Web UIのURLを標準出力に表示
+
+### WebUI機能拡張
+- **プロジェクト変更**: サーバーを再起動せずにディレクトリを変更
+- **ディレクトリ選択**: File System Access APIによるGUI選択
+- **フォールバック**: 古いブラウザでは従来の入力方式
+
+### ファイル監視の最適化
+- **フィルタリング**: `*.rs`ファイルのみ監視でノイズ削減
+- **スロットル**: 2秒間隔のバッチ処理でパフォーマンス向上
+- **git pull対応**: 大量ファイル変更時の効率的処理
 
 ## 開発上の注意点
 
@@ -125,10 +154,11 @@ claude mcp add code-intel -- $(pwd)/target/release/code_intel mcp-client
 
 ## 将来計画
 
-### Phase 2 (ファイル監視)
-- notifyによる変更検知
+### Phase 2 (ファイル監視) ✅ 完了
+- notifyによる変更検知（Rustファイル専用）
 - 差分更新
 - ホットリロード
+- スロットル機能による効率化
 
 ### Phase 3 (機能拡張)
 - find_usages実装
